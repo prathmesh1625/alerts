@@ -1,0 +1,418 @@
+# Momentum Alerts
+
+An AI agent that reads every PDF the NSE/BSE scraper downloads, extracts the
+financials with `gpt-4o-mini`, applies a screening formula, and surfaces the
+companies that clear it on a dashboard.
+
+```
+ shares/scraper ──▶ Postgres: announcements ──┐
+ shares/bse-scraper ──▶ storage/pdf/*.pdf ────┤
+                                              │
+                              ┌───────────────▼────────────────┐
+                              │  engine/agent.py               │
+                              │   1. extract text (+OCR)       │
+                              │   2. prefilter (free)          │
+                              │   3. dedup NSE/BSE copies      │
+                              │   4. gpt-4o-mini → signals     │
+                              │   5. apply the formula → score │
+                              └───────────────┬────────────────┘
+                                              │
+         Postgres: filing_analyses + document_claims + stock_alerts
+                                              │
+                              engine/api.py ──▶ dashboard/ (React)
+```
+
+The agent never writes to the scraper's tables — it only reads `announcements`
+and owns three new tables of its own in the same database.
+
+---
+
+## The formula
+
+| # | Rule | Threshold | Weight | Full credit at |
+|---|------|-----------|--------|----------------|
+| 1 | Profit (PAT) growth, YoY | ≥ **25%** | 35 | +100% |
+| 2 | Revenue growth, YoY | ≥ **50%** | 35 | +200% |
+| 3 | Orders received | ≥ **₹1 Cr** | 30 | ₹1,000 Cr |
+
+Each rule is scored **independently**. A rule that fires contributes
+
+```
+weight × (0.70 + 0.30 × strength)
+```
+
+where `strength` is 0 at the threshold and 1 at the full-credit mark. So
+clearing a bar banks 70% of that rule's weight and the last 30% is earned by the
+size of the beat — which is what makes the dashboard ranking meaningful instead
+of just an alphabetical list of everything that qualified.
+
+A filing becomes an alert at **score ≥ 20**, which is below the smallest single
+rule contribution (30 × 0.7 = 21) — so **any one rule firing surfaces the
+stock**, and the score orders them.
+
+**Conviction bands:** Strong ≥ 70 · Moderate ≥ 45 · Watch ≥ 20
+
+Growth is measured **year-over-year** — against the *corresponding quarter of
+the previous year*, not the preceding quarter. The prompt is explicit about
+this because the YoY column is the third numeric column in a standard Indian
+results table and reading the second one instead is the single easiest mistake
+to make.
+
+Everything above is tunable in `engine/.env` — see `engine/.env.example`.
+
+### Two deliberate judgment calls
+
+**Growth is recomputed in Python, not trusted from the model.** The model is
+asked to *read* the current and year-ago figures; `signals.yoy_growth` does the
+division. LLMs are reliable at pulling a number out of a table and unreliable at
+dividing two of them, so the arithmetic that decides an alert is arithmetic we
+can reproduce. (`shares/bot/output.py` reaches the same conclusion with its
+`recompute_changes`.)
+
+**A loss-to-profit turnaround fires rule 1 without a percentage.** Going from
+−₹10 Cr to +₹5 Cr is not "+150% growth" — the percentage is meaningless when the
+denominator is negative — but it is exactly the kind of result the screen
+exists to catch. It fires at threshold credit and the card says *why*, rather
+than being silently dropped as "no growth figure".
+
+---
+
+## Coverage
+
+The agent is **symbol-agnostic**. It processes every row in `announcements`
+with `download_status = 'DOWNLOADED'`, with no symbol list of its own — so it
+automatically covers exactly the companies the scraper is currently watching.
+
+That set is subscription-driven (`scraper/services/symbolProvider.js` →
+`subscribedCompanyRepository`: every symbol with at least one ACTIVE
+subscription, refreshed every ~20s). **A company added by a new subscriber is
+picked up on the agent's next cycle with no configuration here.**
+
+Both feeds are covered. The BSE scraper resolves numeric scrip codes back to
+the NSE ticker before inserting (`bse-scraper/services/scripMap.js`), so
+`company_symbol` means the same thing on every row and one company's NSE and
+BSE filings land under one symbol on the dashboard.
+
+### Cross-exchange duplicates
+
+Because both scrapers write to the same `announcements` table under different
+`pdf_url`s, **one filing usually produces two rows**. Left alone that would
+bill OpenAI twice and put two identical cards on the dashboard.
+
+The agent identifies the *document* rather than the announcement: it hashes the
+normalised extracted text and claims a `(company_symbol, fingerprint)` pair in
+`document_claims`. The first copy to claim it is analysed; the second is
+recorded as `SKIPPED — duplicate of announcement N`. The claim is an
+`INSERT ... ON CONFLICT DO NOTHING` against a primary key, so two copies racing
+in the same cycle cannot both win.
+
+The title cannot do this job — the exchanges describe one filing from their own
+taxonomies, and a match loose enough to unite them also unites filings that are
+genuinely different. (Same conclusion, and the same normalisation, as
+`_document_fingerprint` in `bot/db_watcher.py`.)
+
+Two guards keep the dedup from over-reaching:
+
+- A document with fewer than `FINGERPRINT_MIN_CHARS` (200) normalised
+  characters gets no fingerprint and is simply not deduped. **This is set lower
+  than the bot's 400 deliberately** — the bot falls back to a subject-line key
+  when a document is too short and we have no such fallback, and a measured
+  typical one-page order-win intimation flattens to ~360 characters, i.e.
+  exactly the filings that would silently stop being deduped at 400.
+- A fingerprint match only counts inside `DEDUP_WINDOW_HOURS` (72). Real
+  cross-exchange copies arrive minutes apart, so this costs nothing — it bounds
+  the damage if two different filings ever hash alike (possible when a PDF's
+  text layer is nothing but a boilerplate cover letter) so a collision can never
+  suppress an unrelated alert weeks later.
+
+## Cost control
+
+The scraper ingests **every** filing for every subscribed company, and most of
+them (trading-window closures, shareholding patterns, AGM notices, compliance
+certificates) can never satisfy any rule. `engine/prefilter.py` gates the model
+call on a free keyword check, which cuts the OpenAI bill by roughly an order of
+magnitude.
+
+The gate checks in this order, so a misleading title can never discard a real
+filing:
+
+1. title indicates results or an order win → **analyse**
+2. body contains a results statement → **analyse**
+3. body describes an order win with a value → **analyse**
+4. title is a known-routine compliance filing → **skip**
+5. otherwise → **skip**
+
+Every decision is written to `filing_analyses` with its reason, so a skip is an
+auditable choice rather than a silent drop. Set `PREFILTER_ENABLED=false` to
+send everything to the model.
+
+---
+
+## Running it
+
+### 1. Engine
+
+```bash
+cd engine
+python -m venv .venv && .venv\Scripts\activate      # Windows
+pip install -r requirements.txt
+
+copy .env.example .env          # then fill in OPENAI_API_KEY and DB_PASSWORD
+```
+
+Point it at the scraper's database and PDF directory in `.env`:
+
+```ini
+DB_HOST=localhost
+DB_PORT=5433                      # docker-compose publishes 5432 here
+DB_NAME=nse_ingestion
+DB_PASSWORD=...
+SCRAPER_BASE_PATH=D:\prathmesh\shares
+OPENAI_API_KEY=sk-...
+```
+
+Then run the two processes:
+
+```bash
+python agent.py          # the worker loop — creates its tables on first run
+python api.py            # the read API, on :8000
+```
+
+`python agent.py --once` runs a single pass and exits, which is what you want
+from a scheduled task rather than a long-lived container.
+
+### 2. Dashboard
+
+```bash
+cd dashboard
+npm install
+npm run dev              # http://localhost:5174
+```
+
+The Vite dev server proxies `/api/*` to `http://localhost:8000`, so no CORS
+setup is needed in development. For a production build set `VITE_API_BASE` to
+the engine's public URL.
+
+---
+
+## Testing without a production database
+
+You do not need the scraper's real database — or Docker — to exercise the whole
+system. `engine/devseed.py` builds a throwaway `announcements` table from PDFs
+already on disk, so the agent, API and dashboard all run exactly as they will in
+production, against real filings.
+
+**1. Start an isolated Postgres** using the binaries a normal PostgreSQL install
+already ships. No admin rights, no Docker, and it cannot touch any existing
+instance — it is a separate cluster on its own port, loopback-only:
+
+```bash
+PGBIN="C:/Program Files/PostgreSQL/16/bin"
+DEVDB="$TEMP/alerts_devdb"
+
+"$PGBIN/initdb.exe" -D "$DEVDB" -U postgres -A trust -E UTF8 --locale=C
+"$PGBIN/pg_ctl.exe" -D "$DEVDB" -o "-p 5440" -l "$DEVDB.log" start
+```
+
+Note `initdb` needs a directory it can set ACLs on — a path under `%TEMP%`
+works; some paths on secondary drives fail with "Permission denied".
+
+**2. Point `engine/.env` at it** — `DB_PORT=5440`, `DB_PASSWORD=` (empty; the
+cluster uses trust auth on loopback).
+
+**3. Seed and run:**
+
+```bash
+cd engine
+python devseed.py --create-db --limit 150     # one row per PDF found
+python agent.py --once                        # repeat until the queue drains
+python api.py
+```
+
+`devseed.py` reads the symbol, timestamp and exchange out of the scraper's own
+filenames (`ACC_11062026175814.pdf`, `BSE_CYIENT_2026-06-09T23_12_52.267.pdf`)
+and stores `local_path` **relative**, exactly as the scraper does — so
+`resolve_pdf_path` is exercised the same way it will be in production. It
+refuses to seed a database that already holds announcements unless you pass
+`--force` or `--reset`, so it cannot be aimed at a real one by accident.
+
+Set `BACKFILL_DAYS` wide enough to reach the seeded filings — historical PDFs
+are older than a live feed's, and the agent only looks back that far.
+
+`testdata/` holds two synthetic filings (symbol `HELIOSTEST`) that are known to
+clear the formula — one results filing, one order win. They give the dashboard
+guaranteed content while you check the UI, and they are obviously not real
+companies. Seed them with an absolute `local_path`.
+
+### What a real run looks like
+
+Against 193 genuine filings from the scraper's storage:
+
+| | |
+|---|---|
+| Skipped free by the prefilter | 170 (88%) |
+| Sent to gpt-4o-mini | 23 (12%) |
+| Unreadable PDFs (settled, not retried) | 2 |
+| Alerts raised | 1 real (`ASIANPAINT`, PAT +69.2% Q4 FY26) |
+
+One alert from 193 filings is the formula working as specified, not a fault:
+≥25% profit *and* ≥50% revenue growth are high bars, and most filings are
+governance documents rather than results. Expect quiet days.
+
+## Checking a single filing
+
+The fastest way to answer "why did / didn't this alert?" — no worker cycle, no
+database:
+
+```bash
+cd engine
+python run_once.py "D:\prathmesh\shares\storage\pdf\SUZLON_2025-10-30.pdf" \
+    --symbol SUZLON --title "Outcome of Board Meeting"
+```
+
+It prints the extraction diagnostics (pages, OCR'd pages, character counts),
+the prefilter decision and its reason, the raw signals the model read, and the
+full per-rule scoring breakdown.
+
+Add `--no-llm` to stop before the model call (useful for debugging extraction
+without an API key), or `--dump-text out.txt` to inspect exactly what the model
+would have been sent.
+
+---
+
+## Tests
+
+```bash
+cd engine
+python test_scoring.py      # 18 — the formula
+python test_prefilter.py    # 13 — the cost gate
+python test_agent.py        # 13 — end-to-end, real PDF on disk
+```
+
+`pytest` works too. None of them need a database, an API key, or a network —
+`test_agent.py` builds a real PDF in a temp directory and runs the whole
+pipeline over it with only the OpenAI call and the DB writes stubbed. The DB
+stub asserts the shape of the alert dict, so drift between what `agent.py`
+builds and what `db.save_alert` writes fails a test rather than production.
+
+---
+
+## Adding it to the docker-compose stack
+
+Add to `D:\prathmesh\shares\docker-compose.yml` (both services share the
+scraper's `shared_storage` volume so they can read the PDFs):
+
+```yaml
+  alert-agent:
+    build:
+      context: ../message_alerts
+      dockerfile: engine/Dockerfile
+    container_name: nse_alert_agent
+    restart: always
+    environment:
+      - DB_HOST=db
+      - DB_PORT=5432
+      - DB_NAME=nse_ingestion
+      - DB_USER=${DB_USER:-postgres}
+      - DB_PASSWORD=${DB_PASSWORD:?DB_PASSWORD must be set}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:?OPENAI_API_KEY must be set}
+      - SCRAPER_BASE_PATH=/app
+      - PDF_STORAGE_PATH=/app/storage/pdf
+    volumes:
+      - shared_storage:/app/storage
+    depends_on:
+      db:
+        condition: service_healthy
+
+  alert-api:
+    build:
+      context: ../message_alerts
+      dockerfile: engine/Dockerfile
+    container_name: nse_alert_api
+    restart: always
+    command: uvicorn api:app --host 0.0.0.0 --port 8000
+    environment:
+      - DB_HOST=db
+      - DB_PORT=5432
+      - DB_NAME=nse_ingestion
+      - DB_USER=${DB_USER:-postgres}
+      - DB_PASSWORD=${DB_PASSWORD:?DB_PASSWORD must be set}
+      - SCRAPER_BASE_PATH=/app
+      - PDF_STORAGE_PATH=/app/storage/pdf
+      - CORS_ORIGINS=${ALERT_CORS_ORIGINS:-http://localhost:5174}
+    ports:
+      - "8000:8000"
+    volumes:
+      - shared_storage:/app/storage
+    depends_on:
+      db:
+        condition: service_healthy
+```
+
+The engine `Dockerfile` installs `tesseract-ocr`, which the OCR fallback needs.
+Without it, scanned filings (newspaper result cuttings, signed board-meeting
+outcomes) degrade to "no text" and are skipped rather than crashing — you get a
+`SKIPPED` row explaining it.
+
+---
+
+## Schema
+
+Both tables live in the scraper's `nse_ingestion` database and are created
+automatically on first run.
+
+**`document_claims`** — which announcement owns a given document, per company.
+The primary key on `(company_symbol, fingerprint)` is what makes the
+cross-exchange dedup atomic.
+
+**`filing_analyses`** — one row per filing looked at, whatever the outcome.
+This is the worker's ledger: it makes the loop idempotent (restart as often as
+you like, no PDF is re-read or re-billed) and it distinguishes "no alert because
+the numbers didn't qualify" from "no alert because extraction failed".
+
+| column | meaning |
+|---|---|
+| `announcement_id` | unique — the dedup key, FK-in-spirit to `announcements.id` |
+| `status` | `ANALYZED` · `SKIPPED` · `FAILED` |
+| `skip_reason` / `error` | why, in words |
+| `retries` | `FAILED` rows are retried up to `MAX_ANALYSIS_RETRIES` |
+| `fingerprint` | document hash, for cross-exchange dedup |
+| `raw_signals` | JSONB — everything the model read |
+
+**`stock_alerts`** — one row per filing that cleared the formula; the only table
+the dashboard reads. Carries the score, conviction band, which rules fired, the
+three headline numbers, a `breakdown` JSONB with the per-rule arithmetic, and
+`evidence` quotes pulled from the PDF.
+
+---
+
+## API
+
+| endpoint | purpose |
+|---|---|
+| `GET /health` | liveness + a real DB round-trip |
+| `GET /api/config` | the formula as the engine is actually running it |
+| `GET /api/alerts?days=&min_score=&symbol=&limit=` | alerts, strongest first |
+| `GET /api/stats?days=` | counts for the summary strip |
+| `GET /api/alerts/{id}/pdf` | the source filing |
+| `GET /docs` | OpenAPI browser |
+
+The dashboard renders its formula panel from `/api/config` rather than
+hard-coding thresholds, so retuning a weight in `config.py` can't leave the UI
+describing rules that are no longer in force.
+
+---
+
+## A caveat worth stating plainly
+
+Figures are extracted from PDFs by a language model. The prompt is specific
+about the traps that matter on Indian filings — the units line in the table
+header (`Rs. in Lakhs` changes every number by 100×), consolidated vs
+standalone, the YoY column, order *wins* vs order *book* — and growth is
+recomputed in Python rather than trusted from the model. It is still extraction
+from unstructured documents, and it will occasionally be wrong.
+
+Each alert card carries its evidence quotes and a link to the source PDF for
+exactly this reason. Treat the dashboard as a **screen that tells you where to
+look**, not as a verified data feed, and not as a prediction that a stock will
+rise.

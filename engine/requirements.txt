@@ -1,0 +1,23 @@
+# --- core ---
+psycopg2-binary==2.9.9
+python-dotenv==1.0.1
+pydantic>=2.7,<3
+
+# --- LLM (OpenAI gpt-4o-mini via LangChain, same stack as shares/bot) ---
+langchain-core>=0.3,<0.4
+langchain-openai>=0.2,<0.4
+
+# --- PDF text extraction ---
+pypdf>=4.2
+pdfplumber>=0.11
+
+# --- OCR fallback for scanned filings / newspaper result cuttings.
+#     pymupdf rasterises the page, pytesseract reads it - the latter also
+#     needs the tesseract-ocr SYSTEM package (see Dockerfile). ---
+pymupdf>=1.24
+pytesseract>=0.3.10
+Pillow>=10.0
+
+# --- API ---
+fastapi>=0.111
+uvicorn[standard]>=0.30

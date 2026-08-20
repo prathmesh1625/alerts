@@ -1,0 +1,20 @@
+# secrets
+.env
+engine/.env
+dashboard/.env
+dashboard/.env.local
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# node
+node_modules/
+dist/
+
+# scratch
+*.log
+out.txt

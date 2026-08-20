@@ -1,0 +1,31 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+    html {
+        color-scheme: dark;
+    }
+
+    body {
+        @apply bg-brand-navy text-brand-light font-sans antialiased;
+    }
+}
+
+@layer components {
+    /* Faint grid, the same motif the portal uses behind its hero. */
+    .grid-bg {
+        background-image:
+            linear-gradient(rgba(26, 34, 48, .55) 1px, transparent 1px),
+            linear-gradient(90deg, rgba(26, 34, 48, .55) 1px, transparent 1px);
+        background-size: 46px 46px;
+    }
+
+    .skeleton {
+        @apply bg-brand-dark2 rounded;
+        background-image: linear-gradient(90deg,
+                #141927 0%, #1E2535 40%, #141927 80%);
+        background-size: 200% 100%;
+        @apply animate-shimmer;
+    }
+}

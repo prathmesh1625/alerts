@@ -1,0 +1,17 @@
+# .env must NEVER enter the image. config.py loads it with override=True, so a
+# copy baked into the build would clobber the settings docker-compose passes in
+# via `environment:`. In the container, compose is the only source of config.
+.env
+engine/.env
+dashboard/.env
+dashboard/.env.local
+
+# build noise
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+node_modules/
+dist/
+.git/
