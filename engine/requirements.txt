@@ -1,5 +1,9 @@
 # --- core ---
 psycopg2-binary==2.9.9
+# HTTP for the standalone feed scraper (feeds.py) and on-demand PDF
+# downloads (pdf_fetch.py). Installed globally on most dev machines, which is
+# exactly why a missing pin here breaks the Docker build and nothing else.
+requests>=2.32
 python-dotenv==1.0.1
 pydantic>=2.7,<3
 

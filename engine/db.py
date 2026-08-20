@@ -165,6 +165,61 @@ ALTER TABLE announcements
 """
 
 
+# In STANDALONE mode nobody else owns `announcements`, so we create it — the
+# same shape the production scraper uses (scraper/db/ensureSchema.js), so the
+# two modes are interchangeable and the agent's queries do not branch.
+ANNOUNCEMENTS_DDL = """
+CREATE TABLE IF NOT EXISTS announcements (
+  id                SERIAL PRIMARY KEY,
+  company_symbol    VARCHAR(20) NOT NULL,
+  company_name      TEXT,
+  title             TEXT,
+  pdf_url           TEXT NOT NULL UNIQUE,
+  local_path        TEXT,
+  announcement_time TIMESTAMP,
+  download_status   VARCHAR(20) DEFAULT 'PENDING',
+  exchange          VARCHAR(8),
+  created_at        TIMESTAMP DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_announcements_company_symbol
+    ON announcements(company_symbol);
+CREATE INDEX IF NOT EXISTS idx_announcements_time
+    ON announcements(announcement_time DESC);
+"""
+
+
+def ensure_announcements_schema() -> None:
+    """Create the announcements table. STANDALONE mode only."""
+    with get_cursor(dict_rows=False) as cur:
+        cur.execute(ANNOUNCEMENTS_DDL)
+    print("[db] announcements table verified", flush=True)
+
+
+def save_announcement(row: dict) -> bool:
+    """
+    Insert one filing. True if it was new.
+
+    `download_status` is set to DOWNLOADED even though no file exists yet:
+    that column means "ready to analyse" to the agent, and in standalone mode
+    the PDF is fetched on demand from `pdf_url`. `local_path` stays NULL, which
+    is exactly what tells resolve_pdf_path to download.
+    """
+    sql = """
+        INSERT INTO announcements
+            (company_symbol, company_name, title, pdf_url,
+             announcement_time, download_status, exchange)
+        VALUES (%s, %s, %s, %s, %s, 'DOWNLOADED', %s)
+        ON CONFLICT (pdf_url) DO NOTHING
+        RETURNING id
+    """
+    with get_cursor(dict_rows=False) as cur:
+        cur.execute(sql, (
+            row["company_symbol"], row.get("company_name"), row.get("title"),
+            row["pdf_url"], row.get("announced_at"), row.get("exchange"),
+        ))
+        return cur.fetchone() is not None
+
+
 def ensure_schema() -> None:
     with get_cursor(dict_rows=False) as cur:
         cur.execute(SCHEMA_SQL)

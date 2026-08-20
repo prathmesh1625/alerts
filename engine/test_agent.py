@@ -428,16 +428,93 @@ def test_corrupt_pdf_signatures_are_recognised():
     assert agent.is_permanent_failure(PdfReadError("bad xref"))
 
 
+def test_undownloadable_pdf_is_retried_not_discarded():
+    """
+    Standalone mode: a filing whose PDF is not on the CDN yet must stay
+    retryable. BSE lists filings seconds before the attachment is fetchable —
+    bse-scraper retries 8 times for this — so marking it SKIPPED would throw
+    the filing away permanently a minute before it becomes readable.
+    """
+    rec = Recorder()
+    agent.db.record_analysis = rec.record_analysis
+    agent.db.save_alert = rec.save_alert
+    agent.db.claim_document = rec.claim_document
+
+    orig = agent.pdf_fetch.download
+    agent.pdf_fetch.download = lambda url, timeout=None: None  # CDN 404
+    try:
+        f = make_filing(None, title="Financial Results")
+        f["local_path"] = None
+        f["pdf_url"] = "https://www.bseindia.com/xml-data/corpfiling/AttachLive/x.pdf"
+        msg = agent.process_filing(f)
+    finally:
+        agent.pdf_fetch.download = orig
+
+    last = rec.analyses[-1]
+    assert last["status"] == "FAILED", "should stay retryable, got {}".format(last["status"])
+    assert last["bump_retry"] is True
+    assert "WAIT" in msg
+
+
+def test_pdf_claimed_downloaded_but_absent_is_terminal():
+    """
+    The other direction: a scraper set local_path, so it believed the file was
+    on disk. If it is not there, waiting cannot help — settle it.
+    """
+    rec = Recorder()
+    agent.db.record_analysis = rec.record_analysis
+    agent.db.save_alert = rec.save_alert
+    agent.db.claim_document = rec.claim_document
+
+    f = make_filing("storage/pdf/nope.pdf", title="Financial Results")
+    msg = agent.process_filing(f)
+
+    last = rec.analyses[-1]
+    assert last["status"] == "SKIPPED"
+    assert "missing" in last["skip_reason"]
+    assert "SKIP" in msg
+
+
+def test_routine_title_skips_before_any_download():
+    """The title screen must run before the network, not after."""
+    rec = Recorder()
+    agent.db.record_analysis = rec.record_analysis
+    agent.db.save_alert = rec.save_alert
+    agent.db.claim_document = rec.claim_document
+
+    called = {"n": 0}
+    orig = agent.pdf_fetch.download
+
+    def _counting(url, timeout=None):
+        called["n"] += 1
+        return None
+
+    agent.pdf_fetch.download = _counting
+    try:
+        f = make_filing(None, title="Closure of Trading Window")
+        f["local_path"] = None
+        f["pdf_url"] = "https://example.invalid/x.pdf"
+        agent.process_filing(f)
+    finally:
+        agent.pdf_fetch.download = orig
+
+    assert called["n"] == 0, "downloaded a PDF the title already ruled out"
+    assert rec.analyses[-1]["status"] == "SKIPPED"
+
+
 def test_missing_pdf_is_recorded_not_crashed():
     rec = Recorder()
     agent.db.record_analysis = rec.record_analysis
     agent.db.save_alert = rec.save_alert
     agent.db.claim_document = rec.claim_document
 
-    msg = agent.process_filing(make_filing("does/not/exist.pdf"))
+    # No pdf_url either, so there is nothing to fall back to downloading.
+    f = make_filing("does/not/exist.pdf")
+    f["pdf_url"] = None
+    msg = agent.process_filing(f)
 
     assert rec.analyses[-1]["status"] == "SKIPPED"
-    assert "not found" in rec.analyses[-1]["skip_reason"]
+    assert "missing" in rec.analyses[-1]["skip_reason"]
     assert "SKIP" in msg
 
 

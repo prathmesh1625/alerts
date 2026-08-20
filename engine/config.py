@@ -67,6 +67,36 @@ PDF_STORAGE_PATH = os.getenv("PDF_STORAGE_PATH", "")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+#  Standalone mode — our own scraper and our own PDF fetching
+#
+#  Set STANDALONE=true to run without the production scrapers: feeds.py polls
+#  NSE and BSE directly, and PDFs are downloaded on demand from `pdf_url`
+#  instead of read from a shared volume. That is what makes this stack
+#  deployable on its own, with no coupling to the service your users depend on.
+# ─────────────────────────────────────────────────────────────────────────────
+STANDALONE = _bool("STANDALONE", False)
+
+# How many pages of each global feed to pull per cycle. One page is ~50 filings
+# on NSE, newest first.
+NSE_FEED_PAGES = _int("NSE_FEED_PAGES", 2)
+BSE_FEED_PAGES = _int("BSE_FEED_PAGES", 2)
+
+# Seconds between feed polls. Deliberately far slower than the production
+# scraper's 20s: that one races to deliver WhatsApp pushes, where speed is the
+# product. A dashboard alert is not latency-critical, and polling gently keeps
+# a second scraper on the same server IP well clear of NSE's rate limiting.
+SCRAPE_INTERVAL_SEC = _int("SCRAPE_INTERVAL_SEC", 180)
+
+# Where on-demand PDF downloads are cached. A working set, not an archive:
+# pruned by age, because a filing's verdict lives in the database once analysed.
+PDF_CACHE_DIR   = os.getenv("PDF_CACHE_DIR", "/tmp/alert_pdf_cache")
+PDF_CACHE_HOURS = _int("PDF_CACHE_HOURS", 48)
+PDF_DOWNLOAD_TIMEOUT_SEC = _int("PDF_DOWNLOAD_TIMEOUT_SEC", 60)
+# Refuse absurdly large attachments rather than filling the disk with one file.
+PDF_MAX_BYTES = _int("PDF_MAX_BYTES", 60 * 1024 * 1024)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 #  OpenAI
 # ─────────────────────────────────────────────────────────────────────────────
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")

@@ -1,0 +1,186 @@
+# ============================================================================
+#  docker-compose.yml — the INDEPENDENT alerts stack.
+#
+#  Deploy this as its own Coolify resource, from the alerts repo. It shares
+#  nothing with the stack serving your users: its own Postgres, its own scraper,
+#  its own disk. Nothing here can reach that database, that volume, or those
+#  containers, so no mistake in this repo can take down the product.
+#
+#  The cost of that isolation is a second scraper hitting NSE and BSE from the
+#  same server IP — the one way an independent stack could still hurt
+#  production. It is kept small on purpose:
+#
+#      production scraper   feed every 20s, 3 pages, downloads EVERY PDF
+#      this scraper         feed every 180s, 2 pages, downloads NOTHING
+#
+#  The agent downloads only the ~12% of filings that survive the title screen
+#  and the prefilter. That is roughly a thirteenth of the feed traffic, which
+#  keeps both services well clear of NSE's rate limiting.
+#
+#  Coolify: New Resource -> Docker Compose -> this repo. Set OPENAI_API_KEY and
+#  ALERT_DB_PASSWORD, point alerts.equityalerts.in at it, deploy.
+# ============================================================================
+version: "3.8"
+
+services:
+
+  # --- our own database, entirely separate from production's -----------------
+  alert-db:
+    image: postgres:16-alpine
+    container_name: alert_db
+    restart: always
+    environment:
+      POSTGRES_USER: ${ALERT_DB_USER:-alerts}
+      POSTGRES_PASSWORD: ${ALERT_DB_PASSWORD:?ALERT_DB_PASSWORD must be set}
+      POSTGRES_DB: ${ALERT_DB_NAME:-alerts}
+    volumes:
+      - alert_pgdata:/var/lib/postgresql/data
+    # Deliberately NOT published to the host: nothing outside this stack has
+    # any business reaching it.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${ALERT_DB_USER:-alerts}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 512M
+
+  # --- polls the NSE and BSE feeds; downloads nothing ------------------------
+  alert-scraper:
+    build:
+      context: .
+      dockerfile: engine/Dockerfile
+    container_name: alert_scraper
+    restart: always
+    command: python scraper.py
+    environment:
+      - STANDALONE=true
+      - DB_HOST=alert-db
+      - DB_PORT=5432
+      - DB_NAME=${ALERT_DB_NAME:-alerts}
+      - DB_USER=${ALERT_DB_USER:-alerts}
+      - DB_PASSWORD=${ALERT_DB_PASSWORD:?ALERT_DB_PASSWORD must be set}
+      # Gentle on purpose - see the note at the top of this file.
+      - SCRAPE_INTERVAL_SEC=${ALERT_SCRAPE_INTERVAL_SEC:-180}
+      - NSE_FEED_PAGES=${ALERT_NSE_FEED_PAGES:-2}
+      - BSE_FEED_PAGES=${ALERT_BSE_FEED_PAGES:-2}
+      # Unused by this process, but config.py reads it at import.
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+    depends_on:
+      alert-db:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          # One HTTP request per page per cycle. It needs almost nothing.
+          cpus: "0.25"
+          memory: 256M
+
+  # --- reads the filings worth reading, applies the formula ------------------
+  alert-agent:
+    build:
+      context: .
+      dockerfile: engine/Dockerfile
+    container_name: alert_agent
+    restart: always
+    command: python agent.py
+    environment:
+      - STANDALONE=true
+      - DB_HOST=alert-db
+      - DB_PORT=5432
+      - DB_NAME=${ALERT_DB_NAME:-alerts}
+      - DB_USER=${ALERT_DB_USER:-alerts}
+      - DB_PASSWORD=${ALERT_DB_PASSWORD:?ALERT_DB_PASSWORD must be set}
+
+      - OPENAI_API_KEY=${OPENAI_API_KEY:?OPENAI_API_KEY must be set}
+      - OPENAI_MODEL=${ALERT_MODEL:-gpt-4o-mini}
+
+      # PDFs are downloaded on demand into a pruned cache, NOT archived - the
+      # verdict lives in the database once a filing is analysed.
+      - PDF_CACHE_DIR=/app/pdf_cache
+      - PDF_CACHE_HOURS=${ALERT_PDF_CACHE_HOURS:-48}
+
+      # --- CPU budget (parsing PDFs is ~0.34s of CPU each) ------------------
+      # Screens on the announcement title before downloading OR parsing.
+      # Biggest single saving; leave it on.
+      - SKIP_BY_TITLE=${ALERT_SKIP_BY_TITLE:-true}
+      - WORKER_THREADS=${ALERT_WORKER_THREADS:-2}
+      - BATCH_SIZE=${ALERT_BATCH_SIZE:-10}
+      - POLL_INTERVAL_SEC=${ALERT_POLL_INTERVAL_SEC:-60}
+      # OCR is the heaviest path there is. OCR_ENABLED=false removes the spike
+      # entirely, at the cost of giving up scanned filings.
+      - OCR_ENABLED=${ALERT_OCR_ENABLED:-true}
+      - OCR_DPI=${ALERT_OCR_DPI:-200}
+      - OCR_MAX_PAGES=${ALERT_OCR_MAX_PAGES:-3}
+      - OCR_TIME_BUDGET_SEC=${ALERT_OCR_TIME_BUDGET_SEC:-20}
+
+      # Start at 1: on first boot everything inside this window is analysed,
+      # so a large value is a one-off spike in CPU *and* OpenAI spend.
+      - BACKFILL_DAYS=${ALERT_BACKFILL_DAYS:-1}
+      - ALERT_MIN_SCORE=${ALERT_MIN_SCORE:-20}
+    volumes:
+      - alert_pdf_cache:/app/pdf_cache
+    depends_on:
+      alert-db:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: "${ALERT_CPU_LIMIT:-0.75}"
+          memory: ${ALERT_MEM_LIMIT:-768M}
+
+  # --- read-only API ---------------------------------------------------------
+  alert-api:
+    build:
+      context: .
+      dockerfile: engine/Dockerfile
+    container_name: alert_api
+    restart: always
+    command: uvicorn api:app --host 0.0.0.0 --port 8000 --workers 1
+    environment:
+      - STANDALONE=true
+      - DB_HOST=alert-db
+      - DB_PORT=5432
+      - DB_NAME=${ALERT_DB_NAME:-alerts}
+      - DB_USER=${ALERT_DB_USER:-alerts}
+      - DB_PASSWORD=${ALERT_DB_PASSWORD:?ALERT_DB_PASSWORD must be set}
+      - PDF_CACHE_DIR=/app/pdf_cache
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+    volumes:
+      # Read-only: it serves cached PDFs, it must never write to them.
+      - alert_pdf_cache:/app/pdf_cache:ro
+    depends_on:
+      alert-db:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 256M
+
+  # --- the dashboard, and the only thing exposed to the internet -------------
+  alert-dashboard:
+    build:
+      context: .
+      dockerfile: dashboard/Dockerfile
+    container_name: alert_dashboard
+    restart: always
+    environment:
+      # Coolify routes the domain and issues the certificate from this.
+      - SERVICE_FQDN_ALERTDASHBOARD_80=https://alerts.equityalerts.in
+    expose:
+      - "80"
+    depends_on:
+      - alert-api
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 128M
+
+volumes:
+  alert_pgdata:
+  alert_pdf_cache:

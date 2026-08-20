@@ -27,6 +27,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import config
 import db
 import extractor
+import pdf_fetch
 import scoring
 from pdf_text import document_fingerprint, extract_text_from_pdf_file
 from prefilter import should_analyze, should_open_pdf
@@ -115,26 +116,53 @@ def process_filing(filing: dict) -> str:
     symbol = filing["company_symbol"]
     title = filing.get("title") or ""
     local_path = filing.get("local_path")
-    file_key = os.path.basename(str(local_path)) if local_path else None
+    # In standalone mode there is no local_path; the URL's basename is the
+    # stable identifier for the document instead.
+    file_key = os.path.basename(str(local_path or filing.get("pdf_url") or "")) or None
 
     try:
-        path = resolve_pdf_path(local_path)
-        if not path:
-            db.record_analysis(
-                ann_id, symbol, file_key, "SKIPPED",
-                skip_reason="PDF not found on disk (local_path={})".format(local_path),
-            )
-            return "{} SKIP  file missing".format(symbol)
-
-        # Cheapest possible check first: a regulation-defined caption like
-        # "Trading Window closure" can never carry a results statement or an
-        # order win, so there is no reason to spend CPU parsing the PDF to find
-        # that out. This is the difference between opening every filing the
-        # scraper downloads and opening only the plausible ones.
+        # Cheapest possible check first, and it now comes before we even LOOK
+        # for the file: a regulation-defined caption like "Trading Window
+        # closure" can never carry a results statement or an order win, so
+        # there is no reason to parse the PDF — or, in standalone mode, to
+        # download it at all. This is the difference between handling every
+        # filing on the feed and handling only the plausible ones.
         open_it, why = should_open_pdf(title)
         if not open_it:
             db.record_analysis(ann_id, symbol, file_key, "SKIPPED", skip_reason=why)
             return "{} SKIP  {}".format(symbol, why)
+
+        path = resolve_pdf_path(local_path)
+
+        if not path:
+            # No local copy. With a scraper sharing its volume that means the
+            # file is genuinely missing; standing alone it is the normal case,
+            # because nothing has downloaded it yet.
+            path = pdf_fetch.download(filing.get("pdf_url"))
+
+        if not path:
+            # A download that failed is usually NOT terminal. BSE lists a filing
+            # seconds before its PDF reaches the CDN — bse-scraper retries this
+            # 8 times for exactly that reason — so recording it as SKIPPED would
+            # permanently discard filings that appear a minute later.
+            #
+            # Retryable when we were meant to fetch it ourselves; genuinely
+            # missing when a scraper claimed to have downloaded it and the file
+            # is not there, which no amount of waiting will fix.
+            if filing.get("pdf_url") and not local_path:
+                db.record_analysis(
+                    ann_id, symbol, file_key, "FAILED",
+                    error="PDF not retrievable yet ({})".format(
+                        (filing.get("pdf_url") or "")[-70:]),
+                    bump_retry=True,
+                )
+                return "{} WAIT  PDF not on the CDN yet".format(symbol)
+
+            db.record_analysis(
+                ann_id, symbol, file_key, "SKIPPED",
+                skip_reason="PDF missing on disk (local_path={})".format(local_path),
+            )
+            return "{} SKIP  PDF missing".format(symbol)
 
         text = extract_text_from_pdf_file(path)
 
@@ -289,6 +317,13 @@ def main() -> None:
             traceback.print_exc(file=sys.stderr)
             time.sleep(config.POLL_INTERVAL_SEC)
             continue
+
+        # Keep the on-demand download cache bounded. Cheap, and a no-op when
+        # nothing has been downloaded (i.e. when a scraper shares its volume).
+        try:
+            pdf_fetch.prune_cache()
+        except Exception as e:
+            print("[agent] cache prune failed: {}".format(e), file=sys.stderr)
 
         # A full batch means there is probably more waiting. Results days arrive
         # in bursts — dozens of companies file within minutes of each other — and

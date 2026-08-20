@@ -297,7 +297,67 @@ builds and what `db.save_alert` writes fails a test rather than production.
 
 ---
 
-## Deploying on Coolify
+## Deploying on Coolify (standalone — recommended)
+
+`docker-compose.yml` at the repo root is a **fully independent stack**: its own
+Postgres, its own scraper, its own disk. It shares nothing with the service
+your users depend on, so no mistake in this repo can take that down.
+
+```
+alert-scraper ──▶ alert-db (own Postgres) ──▶ alert-agent ──▶ alert-api ──▶ alert-dashboard
+  polls NSE/BSE      announcements +              downloads      read-only     alerts.equityalerts.in
+  feeds only         alerts tables               only the PDFs
+                                                 worth reading
+```
+
+**Steps**
+
+1. Coolify → **New Resource** → **Docker Compose** → this repo, branch `main`.
+2. Environment variables:
+
+   | Variable | Value |
+   |---|---|
+   | `OPENAI_API_KEY` | your key |
+   | `ALERT_DB_PASSWORD` | any strong password — this database is new |
+   | `ALERT_BACKFILL_DAYS` | `1` for the first deploy |
+
+3. Domain: the compose file declares
+   `SERVICE_FQDN_ALERTDASHBOARD_80=https://alerts.equityalerts.in`. Add an A
+   record for `alerts` → your Coolify host.
+4. Deploy. Every table is created on first boot; there is nothing to migrate.
+
+Only `alert-dashboard` is exposed. The database is not published to the host,
+and the API is reachable only through nginx on the same origin.
+
+### The one way this could still affect production
+
+A second scraper hits NSE and BSE **from the same server IP**, and NSE rate
+limits aggressively. That is why this scraper is deliberately small:
+
+| | your production scraper | this one |
+|---|---|---|
+| Feed poll | every 20s, 3 pages | every 180s, 2 pages |
+| PDFs downloaded | **every one** | only the ~12% worth reading |
+
+Roughly a thirteenth of the feed traffic. The asymmetry is possible because the
+production scraper races to deliver WhatsApp pushes — speed is the product
+there — whereas a dashboard alert is not latency-critical. If you ever see NSE
+throttling, raise `ALERT_SCRAPE_INTERVAL_SEC` before anything else.
+
+### Why the PDFs are not stored
+
+The production scraper downloads every PDF because the bot delivers them to
+users. This engine reads roughly an eighth of them — the title screen and
+prefilter discard the rest — so it fetches on demand from `pdf_url` into a
+cache pruned after `PDF_CACHE_HOURS`. That is what removes the need for a
+shared volume, and it is what makes the standalone deployment possible at all.
+
+A download that fails is treated as **retryable**, not terminal: BSE routinely
+lists a filing seconds before its attachment reaches the CDN (`bse-scraper`
+retries this 8 times for the same reason), so discarding it would lose filings
+that become readable a minute later.
+
+## Deploying into the existing stack (alternative)
 
 **This must go into the stack that already runs your scrapers — not as a
 separate Coolify application.** The agent does not scrape; it reads the
