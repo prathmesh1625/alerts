@@ -309,38 +309,81 @@ Deployed into that stack, live filings flow through automatically: the scrapers
 download a PDF and insert a row, and the agent picks it up on its next poll
 (≤60s later).
 
+### Do NOT create a new Coolify resource
+
+A new resource gets its own Docker network and its own volume namespace, and
+both break this immediately:
+
+* `DB_HOST=db` will not resolve — `db` exists only inside the existing stack's
+  network;
+* `shared_storage` would be created **fresh and empty**, so the agent would
+  find no PDFs at all.
+
+These services must be part of the same compose project. That means editing the
+`docker-compose.yml` in the repo Coolify already deploys
+(`prathmesh1625/NSE-subscription-website`, branch `main`) — there is no clicking
+"New Resource" in this flow.
+
 ### Steps
 
-1. **Paste `deploy/coolify-compose.yml` into your existing
-   `docker-compose.yml`**, under `services:`, alongside `scraper` and
-   `bse-scraper`. It defines `alert-agent`, `alert-api` and `alert-dashboard`.
-   Nothing else in the file changes — the three services reuse the `db` service
-   and the `shared_storage` volume already declared there.
+**1. Vendor the code into the deployed repo.** Coolify's builder only ever
+checks out `NSE-subscription-website`, so the source has to be inside it:
 
-2. **Set the new environment variables** in Coolify:
+```bash
+cd /path/to/NSE-subscription-website
+git rm -r --cached alerts 2>/dev/null; rm -rf alerts
+cp -r /path/to/message_alerts alerts
+rm -rf alerts/.git alerts/engine/.env alerts/testdata alerts/.devdb
+```
 
-   | Variable | Value |
-   |---|---|
-   | `OPENAI_API_KEY` | your key (already in the stack for the bot) |
-   | `ALERT_BACKFILL_DAYS` | `1` for the first deploy |
-   | `ALERT_CPU_LIMIT` | `0.75` |
+Confirm `alerts/engine/.env` is gone before committing — it holds a live
+OpenAI key. The repo's own `.gitignore` will not protect you here, because you
+are committing into a *different* repo.
 
-   Everything else has a working default.
+**2. Paste `deploy/coolify-compose.yml` into that repo's
+`docker-compose.yml`**, under `services:`, alongside `scraper` and
+`bse-scraper`. It defines `alert-agent`, `alert-api` and `alert-dashboard`, and
+reuses the `db` service and `shared_storage` volume already declared there.
+Nothing else in the file changes.
 
-3. **Point the domain at the dashboard.** The compose file already declares
-   `SERVICE_FQDN_ALERTDASHBOARD_80=https://alerts.equityalerts.in`, matching
-   the `SERVICE_FQDN_*` convention your `adminer` and `metabase` services use.
-   Add an A record for `alerts` → your Coolify host; Coolify issues the
-   certificate.
+**3. Commit and push.** Coolify watches this repo; pushing is what triggers the
+build.
 
-4. **Deploy.** The agent creates its own three tables (`filing_analyses`,
-   `document_claims`, `stock_alerts`) on first boot. It only ever *reads*
-   `announcements`.
+**4. Add the environment variables** — in Coolify, open the **existing**
+resource → *Environment Variables*:
 
-5. **Watch the first cycle** in the `alert-agent` logs. You want lines like
-   `SKIP … not opened`, `ANALYZED`, and eventually `ALERT`. If you see
-   `PDF not found on disk`, the volume mount is wrong — check
-   `SCRAPER_BASE_PATH=/app` against where your scrapers actually write.
+| Variable | Value | Why |
+|---|---|---|
+| `OPENAI_API_KEY` | your key | Already set for the bot — reuse it |
+| `ALERT_BACKFILL_DAYS` | `1` | First boot analyses everything in this window |
+| `ALERT_CPU_LIMIT` | `0.75` | Hard ceiling on the agent |
+
+Everything else has a working default.
+
+**5. Point the domain at the dashboard.** The compose file already declares
+`SERVICE_FQDN_ALERTDASHBOARD_80=https://alerts.equityalerts.in`, matching the
+`SERVICE_FQDN_*` convention your `adminer` and `metabase` services use. Add an
+A record for `alerts` → your Coolify host; Coolify issues the certificate.
+
+**6. Deploy** from the Coolify UI. The agent creates its own three tables
+(`filing_analyses`, `document_claims`, `stock_alerts`) on first boot, and only
+ever *reads* `announcements`.
+
+**7. Watch the `alert-agent` logs.** Expect `SKIP … not opened`, then
+`ANALYZED`, and eventually `ALERT`. Two failure signatures worth knowing:
+
+* `PDF not found on disk` — the volume mount is wrong; check
+  `SCRAPER_BASE_PATH=/app` against where your scrapers actually write.
+* `could not patch announcements` — the agent reached a database the scrapers
+  do not write to. Check `DB_NAME=nse_ingestion`.
+
+### Keeping the two repos in sync
+
+Vendoring means the code exists twice. The GitHub repo stays canonical; re-copy
+`engine/` and `dashboard/` into `alerts/` when you change them. If that becomes
+annoying, the cleaner fix is a GitHub Actions workflow that builds and pushes
+images to GHCR, after which compose references `image:` instead of `build:` and
+the duplication disappears.
 
 Note the dashboard and API share **one origin**: nginx serves the UI and
 proxies `/api/` to `alert-api` internally (`dashboard/nginx.conf`). So the API

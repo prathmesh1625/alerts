@@ -8,15 +8,21 @@
 #    * it reads the PDF FILES themselves out of the `shared_storage` volume.
 #  A standalone deployment has neither, so it would sit there finding nothing.
 #
-#  The build context is the GitHub repo, so the two projects stay separate
-#  while still deploying as one stack. Requires BuildKit (Coolify uses it) and
-#  a repo the builder can reach — for a private repo, vendor the code into the
-#  shares repo instead and use `context: ./message_alerts`.
+#  BUILD CONTEXT
+#  -------------
+#  Coolify deploys this stack from prathmesh1625/NSE-subscription-website, so
+#  the builder only ever has THAT repo checked out. Copy this project into it
+#  as `alerts/` (see the README) and the contexts below resolve — matching the
+#  `context: .` pattern every existing service in your file already uses.
+#
+#  A `context: https://github.com/...git` git-URL would avoid the copy, but it
+#  depends on the builder having BuildKit plus outbound git access, and this
+#  stack serves live users. Do not find out on a production deploy.
 # ============================================================================
 
   alert-agent:
     build:
-      context: https://github.com/prathmesh1625/alerts.git
+      context: ./alerts
       dockerfile: engine/Dockerfile
     container_name: nse_alert_agent
     restart: always
@@ -91,7 +97,7 @@
 
   alert-api:
     build:
-      context: https://github.com/prathmesh1625/alerts.git
+      context: ./alerts
       dockerfile: engine/Dockerfile
     container_name: nse_alert_api
     restart: always
@@ -122,7 +128,7 @@
 
   alert-dashboard:
     build:
-      context: https://github.com/prathmesh1625/alerts.git
+      context: ./alerts
       dockerfile: dashboard/Dockerfile
     container_name: nse_alert_dashboard
     restart: always
