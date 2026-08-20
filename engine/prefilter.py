@@ -71,6 +71,49 @@ _ORDER_AMOUNT = re.compile(
 )
 
 
+def should_open_pdf(title: str) -> tuple:
+    """
+    Decide from the TITLE ALONE whether this PDF is worth opening at all.
+
+    Returns (should_open: bool, reason: str).
+
+    This is the CPU lever. Parsing a PDF is the most expensive thing this
+    service does — far more than the network wait on OpenAI — and the scraper
+    ingests every filing for every subscribed company, most of which are
+    routine compliance documents. Without this check we pay full extraction
+    cost on all of them just to discard them a millisecond later.
+
+    The trade-off is deliberate and narrow. `should_analyze` checks the BODY
+    before it honours a never-relevant title, precisely so a misleading title
+    cannot discard a real results filing. Skipping here gives that protection
+    up for the titles on `_NEVER_RELEVANT_TITLE` only — captions like "Trading
+    Window closure" and "Shareholding Pattern", which are defined by regulation
+    and never carry a results statement or an order win.
+
+    Set SKIP_BY_TITLE=false to always open the PDF (more thorough, several
+    times the CPU).
+    """
+    if not config.SKIP_BY_TITLE:
+        return True, "title screening disabled"
+
+    title = title or ""
+    if not title.strip():
+        # The scrapers always store a title; a blank one means we cannot judge,
+        # so fall through to the full read rather than guess.
+        return True, "no title to screen on"
+
+    # A positive signal always wins, even if a never-relevant pattern also
+    # matches somewhere in the same caption.
+    if _RESULTS_TITLE.search(title) or _ORDER_TITLE.search(title):
+        return True, "title indicates results or an order win"
+
+    if _NEVER_RELEVANT_TITLE.search(title):
+        return False, "routine compliance filing, not opened ({})".format(
+            title.strip()[:80])
+
+    return True, "title inconclusive - reading the document"
+
+
 def should_analyze(title: str, text: str) -> tuple:
     """
     Decide whether this filing is worth a model call.

@@ -81,13 +81,6 @@ MAX_PDF_CHARS = _int("MAX_PDF_CHARS", 60000)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  OCR fallback (see pdf_text.py)
-#
-#  Only reached when a filing's text layer is missing or mojibake — scanned
-#  newspaper result cuttings and signed board-meeting outcomes. A normal
-#  text-layer filing pays nothing for this.
-# ─────────────────────────────────────────────────────────────────────────────
-# ─────────────────────────────────────────────────────────────────────────────
 #  Cross-exchange duplicate detection (see pdf_text.document_fingerprint)
 #
 #  NSE and BSE publish the same filing under different pdf_urls, so the scraper
@@ -109,6 +102,18 @@ FINGERPRINT_MIN_CHARS = _int("FINGERPRINT_MIN_CHARS", 200)
 DEDUP_WINDOW_HOURS = _int("DEDUP_WINDOW_HOURS", 72)
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+#  OCR fallback (see pdf_text.py)
+#
+#  Only reached when a filing's text layer is missing or mojibake — scanned
+#  newspaper result cuttings and signed board-meeting outcomes. A normal
+#  text-layer filing pays nothing for this.
+#
+#  This is the single most CPU-hungry thing the service can do: rasterising a
+#  page at 300 DPI and running tesseract over it. On a small VPS, lower OCR_DPI
+#  and OCR_MAX_PAGES before touching anything else, or set OCR_ENABLED=false to
+#  give up scanned filings entirely in exchange for near-zero CPU spikes.
+# ─────────────────────────────────────────────────────────────────────────────
 OCR_ENABLED         = _bool("OCR_ENABLED", True)
 OCR_DPI             = _int("OCR_DPI", 300)      # tesseract's sweet spot for print
 OCR_LANGS           = os.getenv("OCR_LANGS", "eng")
@@ -173,6 +178,15 @@ BACKFILL_DAYS = _int("BACKFILL_DAYS", 7)
 # The cheap keyword gate in prefilter.py. Turn off to send EVERY filing to the
 # model (accurate, much more expensive).
 PREFILTER_ENABLED = _bool("PREFILTER_ENABLED", True)
+
+# Screen on the announcement TITLE before opening the PDF at all.
+#
+# This is the main CPU control. Parsing PDFs dominates this service's CPU use,
+# and most filings the scraper ingests are routine compliance documents whose
+# captions are fixed by regulation ("Trading Window", "Shareholding Pattern").
+# Skipping those unopened avoids the parse entirely. Set false to always read
+# the document — more thorough, several times the CPU.
+SKIP_BY_TITLE = _bool("SKIP_BY_TITLE", True)
 
 # Alerts older than this stop showing on the dashboard's default view.
 ALERT_TTL_DAYS = _int("ALERT_TTL_DAYS", 5)

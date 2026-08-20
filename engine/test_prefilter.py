@@ -10,7 +10,7 @@ get through even when their titles are unhelpful.
 
 Run: pytest test_prefilter.py   or   python test_prefilter.py
 """
-from prefilter import should_analyze
+from prefilter import should_analyze, should_open_pdf
 
 RESULTS_BODY = """
     STATEMENT OF UNAUDITED FINANCIAL RESULTS FOR THE QUARTER ENDED 30 SEPTEMBER 2025
@@ -120,6 +120,69 @@ def test_a_misleading_title_cannot_discard_real_results():
     # Title matches the never-relevant list, body is a genuine results table.
     # The body check runs FIRST, so this must still go to the model.
     _yes("Shareholding Pattern", RESULTS_BODY)
+
+
+# --- the title screen: the CPU lever -----------------------------------------
+#
+# should_open_pdf runs BEFORE the PDF is parsed, so a wrong "no" here loses an
+# alert with no chance of recovery. These cases guard that boundary.
+
+def test_routine_compliance_titles_are_not_opened():
+    for title in ("Closure of Trading Window",
+                  "Shareholding Pattern for the quarter ended September 2025",
+                  "Certificate under Regulation 7(3)",
+                  "Corporate Governance Report",
+                  "Voting results of the AGM"):
+        ok, why = should_open_pdf(title)
+        assert not ok, "should not have opened: {}".format(title)
+        assert "not opened" in why
+
+
+def test_results_and_order_titles_are_always_opened():
+    for title in ("Financial Results for the quarter ended 30.09.2025",
+                  "Outcome of Board Meeting",
+                  "Receipt of Order",
+                  "Intimation of Letter of Award",
+                  "Newspaper Advertisement for Financial Results"):
+        ok, _ = should_open_pdf(title)
+        assert ok, "should have opened: {}".format(title)
+
+
+def test_inconclusive_title_is_opened():
+    """The default must be to read the document, not to discard it."""
+    for title in ("Intimation to Stock Exchange",
+                  "Submission under Regulation 33",
+                  "Press Release",
+                  "Disclosure"):
+        ok, why = should_open_pdf(title)
+        assert ok, title
+        assert "inconclusive" in why
+
+
+def test_blank_title_is_opened():
+    # devseed leaves titles null; a live scraper always sets one. Either way,
+    # no title means no basis to judge — so read the document.
+    assert should_open_pdf("")[0]
+    assert should_open_pdf(None)[0]
+    assert should_open_pdf("   ")[0]
+
+
+def test_a_positive_signal_beats_a_routine_one_in_the_same_title():
+    # "Outcome of Board Meeting and closure of trading window" must still open:
+    # the results half is what matters.
+    ok, _ = should_open_pdf("Outcome of Board Meeting and Closure of Trading Window")
+    assert ok
+
+
+def test_title_screen_can_be_disabled():
+    import config
+    old = config.SKIP_BY_TITLE
+    config.SKIP_BY_TITLE = False
+    try:
+        ok, why = should_open_pdf("Closure of Trading Window")
+        assert ok and "disabled" in why
+    finally:
+        config.SKIP_BY_TITLE = old
 
 
 if __name__ == "__main__":

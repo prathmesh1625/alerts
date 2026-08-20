@@ -297,6 +297,75 @@ builds and what `db.save_alert` writes fails a test rather than production.
 
 ---
 
+## Deploying on Coolify
+
+**This must go into the stack that already runs your scrapers — not as a
+separate Coolify application.** The agent does not scrape; it reads the
+`announcements` table the scrapers write, and it reads the PDF *files* out of
+the `shared_storage` volume. A standalone deployment has neither and would find
+nothing to do.
+
+Deployed into that stack, live filings flow through automatically: the scrapers
+download a PDF and insert a row, and the agent picks it up on its next poll
+(≤60s later).
+
+### Steps
+
+1. **Paste `deploy/coolify-compose.yml` into your existing
+   `docker-compose.yml`**, under `services:`, alongside `scraper` and
+   `bse-scraper`. It defines `alert-agent`, `alert-api` and `alert-dashboard`.
+   Nothing else in the file changes — the three services reuse the `db` service
+   and the `shared_storage` volume already declared there.
+
+2. **Set the new environment variables** in Coolify:
+
+   | Variable | Value |
+   |---|---|
+   | `OPENAI_API_KEY` | your key (already in the stack for the bot) |
+   | `ALERT_BACKFILL_DAYS` | `1` for the first deploy |
+   | `ALERT_CPU_LIMIT` | `0.75` |
+
+   Everything else has a working default.
+
+3. **Point the domain at the dashboard.** The compose file already declares
+   `SERVICE_FQDN_ALERTDASHBOARD_80=https://alerts.equityalerts.in`, matching
+   the `SERVICE_FQDN_*` convention your `adminer` and `metabase` services use.
+   Add an A record for `alerts` → your Coolify host; Coolify issues the
+   certificate.
+
+4. **Deploy.** The agent creates its own three tables (`filing_analyses`,
+   `document_claims`, `stock_alerts`) on first boot. It only ever *reads*
+   `announcements`.
+
+5. **Watch the first cycle** in the `alert-agent` logs. You want lines like
+   `SKIP … not opened`, `ANALYZED`, and eventually `ALERT`. If you see
+   `PDF not found on disk`, the volume mount is wrong — check
+   `SCRAPER_BASE_PATH=/app` against where your scrapers actually write.
+
+Note the dashboard and API share **one origin**: nginx serves the UI and
+proxies `/api/` to `alert-api` internally (`dashboard/nginx.conf`). So the API
+is not separately exposed, there is no CORS to configure, and `VITE_API_BASE`
+stays empty in the production build.
+
+### Keeping CPU low
+
+PDF parsing dominates this service — **measured at ~0.34 s of CPU per filing**
+on 2 MB documents. Everything else is rounding error. The controls, in order of
+effect:
+
+| Setting | Default | Why |
+|---|---|---|
+| `SKIP_BY_TITLE` | `true` | Screens on the announcement title **before opening the PDF**. Routine captions (Trading Window, Shareholding Pattern) are skipped unparsed — a title check is ~10⁶× cheaper than a parse. Biggest single saving; leave it on. |
+| `WORKER_THREADS` | `2` | Analysed filings spend most of their time waiting on OpenAI, so throughput barely moves — but parsing is no longer 4-wide. |
+| `OCR_DPI` / `OCR_MAX_PAGES` | `200` / `3` | OCR (rasterise + tesseract) is the heaviest path there is. It only runs on scanned filings, but it spikes hard. `OCR_ENABLED=false` removes it entirely, at the cost of giving up scanned filings. |
+| `BATCH_SIZE` | `10` | Spreads load over more, shorter cycles instead of one long burst. |
+| `ALERT_BACKFILL_DAYS` | `1` | On first boot the agent analyses everything in this window. A large value is a large one-off spike in both CPU **and** OpenAI spend. |
+| `deploy.resources.limits.cpus` | `0.75` | A hard ceiling, so a results-day burst can never starve the bot or backend your users depend on. This is background work and should get the leftovers. |
+
+Between cycles the agent is asleep; the API and dashboard idle at effectively
+zero. The load is bursty by nature — quiet most of the day, busy for the hour
+after results are filed — which is exactly what the CPU limit is there to cap.
+
 ## Adding it to the docker-compose stack
 
 Add to `D:\prathmesh\shares\docker-compose.yml` (both services share the

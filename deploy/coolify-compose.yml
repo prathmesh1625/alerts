@@ -1,0 +1,141 @@
+# ============================================================================
+#  Add these three services to the docker-compose.yml that already runs your
+#  stack (D:\prathmesh\shares\docker-compose.yml), NOT as a separate Coolify
+#  application.
+#
+#  Why it has to live in that stack:
+#    * the agent reads the `announcements` table the scrapers write to, and
+#    * it reads the PDF FILES themselves out of the `shared_storage` volume.
+#  A standalone deployment has neither, so it would sit there finding nothing.
+#
+#  The build context is the GitHub repo, so the two projects stay separate
+#  while still deploying as one stack. Requires BuildKit (Coolify uses it) and
+#  a repo the builder can reach — for a private repo, vendor the code into the
+#  shares repo instead and use `context: ./message_alerts`.
+# ============================================================================
+
+  alert-agent:
+    build:
+      context: https://github.com/prathmesh1625/alerts.git
+      dockerfile: engine/Dockerfile
+    container_name: nse_alert_agent
+    restart: always
+    environment:
+      # --- same database the scrapers write to -----------------------------
+      - DB_HOST=db
+      - DB_PORT=5432
+      - DB_NAME=nse_ingestion
+      - DB_USER=${DB_USER:-postgres}
+      - DB_PASSWORD=${DB_PASSWORD:?DB_PASSWORD must be set}
+
+      # --- the PDFs, via the volume the scrapers write into -----------------
+      # `announcements.local_path` is relative ("storage/pdf/FOO.pdf"), so the
+      # base must be the directory that path is relative TO.
+      - SCRAPER_BASE_PATH=/app
+      - PDF_STORAGE_PATH=/app/storage/pdf
+
+      - OPENAI_API_KEY=${OPENAI_API_KEY:?OPENAI_API_KEY must be set}
+      - OPENAI_MODEL=${ALERT_MODEL:-gpt-4o-mini}
+
+      # ------------------------------------------------------------------
+      #  CPU BUDGET
+      #
+      #  Parsing PDFs dominates this service's CPU: measured at ~0.34s of CPU
+      #  per filing on 2 MB documents. Everything below exists to do less of
+      #  that, and to spread what remains.
+      # ------------------------------------------------------------------
+      # Screen on the announcement title BEFORE opening the PDF. Routine
+      # compliance captions ("Trading Window", "Shareholding Pattern") are
+      # skipped unparsed. This is the single biggest saving - leave it on.
+      - SKIP_BY_TITLE=${ALERT_SKIP_BY_TITLE:-true}
+
+      # Two threads, not four. The slow part of an analysed filing is waiting
+      # on OpenAI, not computing - so throughput barely moves, while the
+      # CPU-bound parsing is no longer 4-wide.
+      - WORKER_THREADS=${ALERT_WORKER_THREADS:-2}
+
+      # Smaller batches finish sooner and spread load across more cycles
+      # instead of pinning the CPU for one long burst.
+      - BATCH_SIZE=${ALERT_BATCH_SIZE:-10}
+      - POLL_INTERVAL_SEC=${ALERT_POLL_INTERVAL_SEC:-60}
+
+      # OCR is the most expensive path there is (rasterise at DPI, then
+      # tesseract). It only runs on scanned filings, but when it does it is
+      # heavy. 200 DPI over 3 pages still reads a newspaper results extract;
+      # set OCR_ENABLED=false to remove the spike entirely and give up on
+      # scanned filings.
+      - OCR_ENABLED=${ALERT_OCR_ENABLED:-true}
+      - OCR_DPI=${ALERT_OCR_DPI:-200}
+      - OCR_MAX_PAGES=${ALERT_OCR_MAX_PAGES:-3}
+      - OCR_TIME_BUDGET_SEC=${ALERT_OCR_TIME_BUDGET_SEC:-20}
+
+      # START AT 1. On first boot the agent analyses everything inside this
+      # window, so a large value means a large one-off CPU and OpenAI spike.
+      # Raise it later once you have watched a normal day.
+      - BACKFILL_DAYS=${ALERT_BACKFILL_DAYS:-1}
+
+      - ALERT_MIN_SCORE=${ALERT_MIN_SCORE:-20}
+    volumes:
+      - shared_storage:/app/storage
+    depends_on:
+      db:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          # A hard ceiling, so a results-day burst can never starve the bot or
+          # the backend that your users actually depend on. The agent is
+          # entirely background work - it gets the leftovers by design.
+          cpus: "${ALERT_CPU_LIMIT:-0.75}"
+          memory: ${ALERT_MEM_LIMIT:-768M}
+
+  alert-api:
+    build:
+      context: https://github.com/prathmesh1625/alerts.git
+      dockerfile: engine/Dockerfile
+    container_name: nse_alert_api
+    restart: always
+    command: uvicorn api:app --host 0.0.0.0 --port 8000 --workers 1
+    environment:
+      - DB_HOST=db
+      - DB_PORT=5432
+      - DB_NAME=nse_ingestion
+      - DB_USER=${DB_USER:-postgres}
+      - DB_PASSWORD=${DB_PASSWORD:?DB_PASSWORD must be set}
+      - SCRAPER_BASE_PATH=/app
+      - PDF_STORAGE_PATH=/app/storage/pdf
+      # Not used by this process, but config.py reads it at import time.
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+    volumes:
+      # Read-only: this process serves PDFs, it must never write to the
+      # scrapers' storage.
+      - shared_storage:/app/storage:ro
+    depends_on:
+      db:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          # Indexed SELECTs only - it needs almost nothing.
+          cpus: "${ALERT_API_CPU_LIMIT:-0.25}"
+          memory: ${ALERT_API_MEM_LIMIT:-256M}
+
+  alert-dashboard:
+    build:
+      context: https://github.com/prathmesh1625/alerts.git
+      dockerfile: dashboard/Dockerfile
+    container_name: nse_alert_dashboard
+    restart: always
+    environment:
+      # Coolify reads this to route the domain and issue the certificate.
+      - SERVICE_FQDN_ALERTDASHBOARD_80=https://alerts.equityalerts.in
+    expose:
+      - "80"
+    depends_on:
+      - alert-api
+    deploy:
+      resources:
+        limits:
+          # nginx serving static files.
+          cpus: "0.25"
+          memory: 128M

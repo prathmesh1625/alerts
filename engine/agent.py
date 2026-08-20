@@ -29,7 +29,7 @@ import db
 import extractor
 import scoring
 from pdf_text import document_fingerprint, extract_text_from_pdf_file
-from prefilter import should_analyze
+from prefilter import should_analyze, should_open_pdf
 
 
 # -----------------------------------------------------------------------------
@@ -125,6 +125,16 @@ def process_filing(filing: dict) -> str:
                 skip_reason="PDF not found on disk (local_path={})".format(local_path),
             )
             return "{} SKIP  file missing".format(symbol)
+
+        # Cheapest possible check first: a regulation-defined caption like
+        # "Trading Window closure" can never carry a results statement or an
+        # order win, so there is no reason to spend CPU parsing the PDF to find
+        # that out. This is the difference between opening every filing the
+        # scraper downloads and opening only the plausible ones.
+        open_it, why = should_open_pdf(title)
+        if not open_it:
+            db.record_analysis(ann_id, symbol, file_key, "SKIPPED", skip_reason=why)
+            return "{} SKIP  {}".format(symbol, why)
 
         text = extract_text_from_pdf_file(path)
 
