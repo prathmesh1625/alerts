@@ -188,6 +188,54 @@ BASE_CREDIT = _float("BASE_CREDIT", 0.70)
 # by conviction" model.
 ALERT_MIN_SCORE = _float("ALERT_MIN_SCORE", 20.0)
 
+# ── Rule 4 — sudden volume spike (volume.py) ─────────────────────────────────
+#
+# Scored SEPARATELY from the three filing rules above and written to its own
+# table. It is not folded into a filing's score, because doing so would have
+# meant re-weighting rules 1-3 and changing every score they already produce.
+#
+# Baselines come from NSE's daily Bhavcopy (all ~2,600 EQ-series stocks), so a
+# stock that is quiet for a month and then spikes is still covered - the live
+# movers feed alone would never have shown it before the spike.
+
+# How many times the trailing MEDIAN volume counts as a spike.
+VOLUME_SPIKE_MIN_X = _float("VOLUME_SPIKE_MIN_X", 5.0)
+# Ratio at which the rule is maxed out. Log-scaled between the two.
+VOLUME_SPIKE_FULL_X = _float("VOLUME_SPIKE_FULL_X", 20.0)
+VOLUME_WEIGHT = _float("VOLUME_WEIGHT", 30.0)
+
+# Trailing sessions the median and max are taken over (~1 trading month).
+VOLUME_LOOKBACK_SESSIONS = _int("VOLUME_LOOKBACK_SESSIONS", 20)
+# Refuse to judge a stock with less history than this. Better silent than wrong.
+VOLUME_MIN_SESSIONS = _int("VOLUME_MIN_SESSIONS", 10)
+
+# Today must also be the highest volume in the window. This is what makes the
+# rule fire on a SUDDEN break rather than every day of a busy fortnight - the
+# difference the whole rule turns on.
+VOLUME_REQUIRE_NEW_HIGH = _bool("VOLUME_REQUIRE_NEW_HIGH", True)
+
+# Sessions of silence after a stock has been flagged. The new-high test alone
+# does not stop a sustained run - on day two the median is still low and volume
+# that edges above yesterday counts as a fresh high, so it fires again. "This
+# stock suddenly got busy" is an event, not a state: report it once.
+VOLUME_COOLDOWN_SESSIONS = _int("VOLUME_COOLDOWN_SESSIONS", 5)
+
+# Liquidity floors. These remove most false positives: without them an illiquid
+# microcap going from 40 shares to 900 reads as a 22x spike.
+#
+# Measured on a real session (2,864 stocks): 3x + Rs 5 Cr gave 49 alerts,
+# 5x + Rs 25 Cr gives about 30. Lower them to widen the net.
+VOLUME_MIN_TURNOVER_CR = _float("VOLUME_MIN_TURNOVER_CR", 25.0)
+VOLUME_MIN_BASELINE_SHARES = _float("VOLUME_MIN_BASELINE_SHARES", 20000.0)
+
+# A spike on a falling price is real information but not a "could go up"
+# signal. Set negative (e.g. -100) to alert on heavy volume in either direction.
+VOLUME_MIN_PRICE_CHANGE_PCT = _float("VOLUME_MIN_PRICE_CHANGE_PCT", 0.0)
+
+# How many sessions of Bhavcopy to pull on a cold start.
+BHAVCOPY_BACKFILL_SESSIONS = _int("BHAVCOPY_BACKFILL_SESSIONS", 25)
+
+
 # Conviction bands used for the dashboard's badge colours.
 BAND_STRONG   = _float("BAND_STRONG", 70.0)
 BAND_MODERATE = _float("BAND_MODERATE", 45.0)

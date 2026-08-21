@@ -4,6 +4,7 @@ import AlertCard from "../components/AlertCard.jsx";
 import FilterBar from "../components/FilterBar.jsx";
 import FormulaPanel from "../components/FormulaPanel.jsx";
 import StatsBar from "../components/StatsBar.jsx";
+import VolumeAlerts from "../components/VolumeAlerts.jsx";
 import { fetchAlerts, fetchConfig, fetchStats } from "../lib/api.js";
 
 const REFRESH_MS = 60_000;
@@ -156,6 +157,7 @@ export default function Alerts({ onUpdated }) {
                         </div>
                     </>
                 )}
+            <VolumeAlerts days={days} />
         </main>
     );
 }

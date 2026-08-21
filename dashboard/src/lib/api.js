@@ -26,6 +26,7 @@ export const fetchAlerts = (params) => get("/api/alerts", params);
 export const fetchCompanies = (params) => get("/api/companies", params);
 export const fetchFilings = (params) => get("/api/filings", params);
 export const fetchMarket = (params) => get("/api/market", params);
+export const fetchVolumeAlerts = (params) => get("/api/volume-alerts", params);
 export const fetchStats = (params) => get("/api/stats", params);
 export const fetchConfig = () => get("/api/config");
 

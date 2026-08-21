@@ -137,6 +137,49 @@ CREATE INDEX IF NOT EXISTS idx_stock_alerts_announced_at
 CREATE INDEX IF NOT EXISTS idx_stock_alerts_symbol
     ON stock_alerts(company_symbol);
 
+-- Rule 4's baseline: one row per stock per session, from NSE's Bhavcopy.
+-- Deliberately its own table, and rule 4's alerts are deliberately their own
+-- table too — folding a volume spike into `stock_alerts` would have meant
+-- re-weighting rules 1-3 and changing every score they have already produced.
+CREATE TABLE IF NOT EXISTS daily_volume (
+    symbol       VARCHAR(20) NOT NULL,
+    session_date DATE        NOT NULL,
+    close        NUMERIC(16,4),
+    prev_close   NUMERIC(16,4),
+    volume       BIGINT,
+    turnover_cr  NUMERIC(16,4),
+    trades       INTEGER,
+    PRIMARY KEY (symbol, session_date)
+);
+
+CREATE INDEX IF NOT EXISTS idx_daily_volume_symbol_date
+    ON daily_volume(symbol, session_date DESC);
+CREATE INDEX IF NOT EXISTS idx_daily_volume_date
+    ON daily_volume(session_date DESC);
+
+CREATE TABLE IF NOT EXISTS volume_alerts (
+    id            SERIAL PRIMARY KEY,
+    symbol        VARCHAR(20) NOT NULL,
+    session_date  DATE        NOT NULL,
+    volume        BIGINT,
+    baseline_median BIGINT,
+    baseline_max    BIGINT,
+    baseline_sessions INTEGER,
+    ratio         NUMERIC(10,2),
+    turnover_cr   NUMERIC(16,2),
+    close         NUMERIC(16,4),
+    pct_change    NUMERIC(10,2),
+    score         NUMERIC(6,2) NOT NULL,
+    conviction    VARCHAR(10)  NOT NULL,
+    headline      TEXT,
+    reason        TEXT,
+    created_at    TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE (symbol, session_date)
+);
+
+CREATE INDEX IF NOT EXISTS idx_volume_alerts_date
+    ON volume_alerts(session_date DESC, score DESC);
+
 -- ---------------------------------------------------------------------------
 --  Column top-ups, for clusters created by an older version of this file.
 --
@@ -589,6 +632,129 @@ def fetch_filing(announcement_id: int):
         )
         row = cur.fetchone()
         return dict(row) if row else None
+
+
+# -----------------------------------------------------------------------------
+#  Rule 4 — volume spikes
+# -----------------------------------------------------------------------------
+
+def save_daily_volumes(rows) -> int:
+    """Store one Bhavcopy session. Idempotent, so re-running a day is free."""
+    if not rows:
+        return 0
+    sql = """
+        INSERT INTO daily_volume
+            (symbol, session_date, close, prev_close, volume, turnover_cr, trades)
+        VALUES %s
+        ON CONFLICT (symbol, session_date) DO UPDATE SET
+            close = EXCLUDED.close, prev_close = EXCLUDED.prev_close,
+            volume = EXCLUDED.volume, turnover_cr = EXCLUDED.turnover_cr,
+            trades = EXCLUDED.trades
+    """
+    values = [(r["symbol"], r["session_date"], r["close"], r["prev_close"],
+               r["volume"], r["turnover_cr"], r["trades"]) for r in rows]
+    with get_cursor(dict_rows=False) as cur:
+        psycopg2.extras.execute_values(cur, sql, values, page_size=1000)
+    return len(values)
+
+
+def have_session(session_date) -> bool:
+    with get_cursor(dict_rows=False) as cur:
+        cur.execute("SELECT 1 FROM daily_volume WHERE session_date = %s LIMIT 1",
+                    (session_date,))
+        return cur.fetchone() is not None
+
+
+def latest_session():
+    with get_cursor(dict_rows=False) as cur:
+        cur.execute("SELECT MAX(session_date) FROM daily_volume")
+        row = cur.fetchone()
+        return row[0] if row else None
+
+
+def fetch_volume_candidates(session_date, lookback: int):
+    """
+    Every stock that traded on `session_date`, with its trailing history.
+
+    The history EXCLUDES the session being judged — comparing a day against a
+    window containing itself would raise the median and hide exactly the spikes
+    this is looking for.
+    """
+    sql = """
+        WITH todays AS (
+            SELECT symbol, volume, turnover_cr, close, prev_close
+            FROM daily_volume
+            WHERE session_date = %(d)s
+        ),
+        hist AS (
+            SELECT dv.symbol, dv.volume,
+                   ROW_NUMBER() OVER (PARTITION BY dv.symbol
+                                      ORDER BY dv.session_date DESC) AS rn
+            FROM daily_volume dv
+            WHERE dv.session_date < %(d)s
+        )
+        SELECT t.symbol, t.volume, t.turnover_cr, t.close, t.prev_close,
+               ARRAY_AGG(h.volume ORDER BY h.rn) FILTER (WHERE h.rn <= %(n)s) AS history,
+               (SELECT MAX(va.session_date) FROM volume_alerts va
+                 WHERE va.symbol = t.symbol AND va.session_date < %(d)s) AS last_alert
+        FROM todays t
+        LEFT JOIN hist h ON h.symbol = t.symbol AND h.rn <= %(n)s
+        GROUP BY t.symbol, t.volume, t.turnover_cr, t.close, t.prev_close
+    """
+    with get_cursor() as cur:
+        cur.execute(sql, {"d": session_date, "n": lookback})
+        return [dict(r) for r in cur.fetchall()]
+
+
+def sessions_between(symbol, start_date, end_date):
+    """Trading sessions between two dates, for the cooldown check."""
+    with get_cursor(dict_rows=False) as cur:
+        cur.execute(
+            """SELECT COUNT(DISTINCT session_date) FROM daily_volume
+               WHERE session_date > %s AND session_date <= %s""",
+            (start_date, end_date))
+        row = cur.fetchone()
+        return int(row[0]) if row else 0
+
+
+def save_volume_alert(v, session_date) -> bool:
+    sql = """
+        INSERT INTO volume_alerts
+            (symbol, session_date, volume, baseline_median, baseline_max,
+             baseline_sessions, ratio, turnover_cr, close, pct_change,
+             score, conviction, headline, reason)
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+        ON CONFLICT (symbol, session_date) DO UPDATE SET
+            score = EXCLUDED.score, ratio = EXCLUDED.ratio,
+            conviction = EXCLUDED.conviction, headline = EXCLUDED.headline
+        RETURNING id
+    """
+    with get_cursor(dict_rows=False) as cur:
+        cur.execute(sql, (
+            v["symbol"], session_date, v["volume"],
+            int(v["baseline_median"]) if v.get("baseline_median") else None,
+            int(v["baseline_max"]) if v.get("baseline_max") else None,
+            v.get("baseline_sessions"), v.get("ratio"), v.get("turnover_cr"),
+            v.get("close"), v.get("pct_change"), v["score"],
+            v["conviction"], v.get("headline"), v.get("reason"),
+        ))
+        return cur.fetchone() is not None
+
+
+def fetch_volume_alerts(days: int, min_score: float = 0.0, symbol=None,
+                        limit: int = 200):
+    clauses = ["session_date >= CURRENT_DATE - (%s * INTERVAL '1 day')",
+               "score >= %s"]
+    params = [days, min_score]
+    if symbol:
+        clauses.append("symbol = %s")
+        params.append(symbol.upper())
+    sql = ("SELECT * FROM volume_alerts WHERE " + " AND ".join(clauses)
+           + " ORDER BY session_date DESC, score DESC LIMIT %s")
+    params.append(limit)
+    with get_cursor() as cur:
+        cur.execute(sql, params)
+        return [dict(r) for r in cur.fetchall()]
 
 
 def fetch_stats(days: int) -> dict:

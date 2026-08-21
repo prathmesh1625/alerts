@@ -181,6 +181,44 @@ services:
           cpus: "0.25"
           memory: 128M
 
+  # --- rule 4: volume spikes, from NSE's daily full-market Bhavcopy ----------
+  alert-volume:
+    build:
+      context: .
+      dockerfile: engine/Dockerfile
+    container_name: alert_volume
+    restart: always
+    command: python volume_worker.py
+    environment:
+      - STANDALONE=true
+      - DB_HOST=alert-db
+      - DB_PORT=5432
+      - DB_NAME=${ALERT_DB_NAME:-alerts}
+      - DB_USER=${ALERT_DB_USER:-alerts}
+      - DB_PASSWORD=${ALERT_DB_PASSWORD:?ALERT_DB_PASSWORD must be set}
+      # Unused here, but config.py reads it at import.
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+
+      # A spike is several times the trailing MEDIAN *and* a new window high.
+      # Measured on a real session of 2,285 stocks: 3x + Rs 5 Cr produced 49
+      # alerts, these defaults produce about 28. Lower them to widen the net.
+      - VOLUME_SPIKE_MIN_X=${ALERT_VOLUME_SPIKE_MIN_X:-5}
+      - VOLUME_MIN_TURNOVER_CR=${ALERT_VOLUME_MIN_TURNOVER_CR:-25}
+      - VOLUME_LOOKBACK_SESSIONS=${ALERT_VOLUME_LOOKBACK:-20}
+      - VOLUME_COOLDOWN_SESSIONS=${ALERT_VOLUME_COOLDOWN:-5}
+      # First boot pulls this many days of Bhavcopy to build baselines. The
+      # rule stays silent for any stock with fewer than VOLUME_MIN_SESSIONS.
+      - BHAVCOPY_BACKFILL_SESSIONS=${ALERT_BHAVCOPY_BACKFILL:-30}
+    depends_on:
+      alert-db:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          # One CSV download a day plus some medians. Almost nothing.
+          cpus: "0.25"
+          memory: 384M
+
 volumes:
   alert_pgdata:
   alert_pdf_cache:

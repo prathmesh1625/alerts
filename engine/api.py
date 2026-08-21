@@ -130,6 +130,19 @@ def get_config():
                 "full_at": config.ORDER_FULL_CR,
             },
         ],
+        "volume_rule": {
+            "key": "VOLUME_SPIKE",
+            "label": "Volume spike",
+            "threshold": config.VOLUME_SPIKE_MIN_X,
+            "unit": "x median",
+            "weight": config.VOLUME_WEIGHT,
+            "full_at": config.VOLUME_SPIKE_FULL_X,
+            "lookback_sessions": config.VOLUME_LOOKBACK_SESSIONS,
+            "requires_new_high": config.VOLUME_REQUIRE_NEW_HIGH,
+            "min_turnover_cr": config.VOLUME_MIN_TURNOVER_CR,
+            "cooldown_sessions": config.VOLUME_COOLDOWN_SESSIONS,
+            "scored_separately": True,
+        },
         "alert_min_score": config.ALERT_MIN_SCORE,
         "base_credit": config.BASE_CREDIT,
         "bands": {"strong": config.BAND_STRONG, "moderate": config.BAND_MODERATE},
@@ -203,6 +216,29 @@ def get_filings(
             r["score"] = float(r["score"])
     return {"window_days": days, "count": len(rows), "offset": offset,
             "filings": rows}
+
+
+@app.get("/api/volume-alerts")
+def get_volume_alerts(
+    days: int = Query(default=5, ge=1, le=90),
+    min_score: float = Query(default=0.0, ge=0, le=100),
+    symbol: str = Query(default=None),
+    limit: int = Query(default=200, ge=1, le=1000),
+):
+    """
+    Rule 4 — stocks whose traded volume suddenly broke from their own pattern.
+
+    A separate endpoint and a separate table from the filing alerts on purpose:
+    a volume spike has no filing behind it, and folding it into the filing score
+    would have re-weighted rules 1-3 and changed every score they had already
+    produced.
+    """
+    rows = _db_call(db.fetch_volume_alerts, days, min_score, symbol, limit)
+    for r in rows:
+        for k in ("score", "ratio", "turnover_cr", "close", "pct_change"):
+            if r.get(k) is not None:
+                r[k] = float(r[k])
+    return {"window_days": days, "count": len(rows), "alerts": rows}
 
 
 @app.get("/api/market")
