@@ -284,6 +284,45 @@ def ensure_schema() -> None:
 
 
 # -----------------------------------------------------------------------------
+#  Date windows
+#
+#  `days` means CALENDAR DAYS INCLUDING TODAY, not a rolling N x 24 hours.
+#  "Today" must mean today's session: once the date rolls over, this morning's
+#  alerts leave "Today" and appear under "3 days".
+#
+#  A rolling window did not do that. At 19:09 IST, NOW() - 1 day reached back to
+#  19:09 the previous evening, so a filing made at 22:03 yesterday was still
+#  being served as "Today".
+#
+#  The timezone is explicit and deliberate. `announcement_time` holds IST values
+#  (that is what both exchange feeds publish), while a container's NOW() is
+#  normally UTC - a 5h30m skew that silently moved filings across the midnight
+#  boundary. Every window below is anchored to the Indian trading day.
+# -----------------------------------------------------------------------------
+
+MARKET_TZ = "Asia/Kolkata"
+
+# Midnight IST at the start of the window, as a naive timestamp.
+_WINDOW_START = ("(timezone('{tz}', now())::date - ((%s - 1) * INTERVAL '1 day'))"
+                 .format(tz=MARKET_TZ))
+
+
+def _day_window(column):
+    """For naive TIMESTAMP columns that already hold IST (announcement_time)."""
+    return "{} >= {}".format(column, _WINDOW_START)
+
+
+def _day_window_tz(column):
+    """For TIMESTAMPTZ columns (created_at) - anchor the boundary to IST."""
+    return "{} >= ({} AT TIME ZONE '{}')".format(column, _WINDOW_START, MARKET_TZ)
+
+
+def _day_window_date(column):
+    """For DATE columns (volume_alerts.session_date)."""
+    return "{} >= ({})::date".format(column, _WINDOW_START)
+
+
+# -----------------------------------------------------------------------------
 #  Reads against the scraper's table
 # -----------------------------------------------------------------------------
 
@@ -309,7 +348,7 @@ def fetch_unanalyzed(limit: int) -> list:
         LEFT JOIN filing_analyses f
                ON f.announcement_id = a.{col_id}
         WHERE a.download_status = 'DOWNLOADED'
-          AND a.{col_time} >= NOW() - (%s * INTERVAL '1 day')
+          AND a.{col_time} >= (timezone('Asia/Kolkata', now())::date - ((%s - 1) * INTERVAL '1 day'))
           AND (
                 f.id IS NULL
                 OR (f.status = 'FAILED' AND f.retries < %s)
@@ -490,7 +529,7 @@ def save_alert(alert: dict) -> None:
 
 def fetch_alerts(days: int, min_score: float, symbol=None, limit: int = 200) -> list:
     clauses = [
-        "announced_at >= NOW() - (%s * INTERVAL '1 day')",
+        _day_window("announced_at"),
         "score >= %s",
     ]
     params = [days, min_score]
@@ -520,7 +559,7 @@ def fetch_alerts(days: int, min_score: float, symbol=None, limit: int = 200) -> 
 
 def fetch_companies(days: int, query=None, limit: int = 500) -> list:
     """Every company with filings in the window, plus what we did with them."""
-    clauses = ["a.announcement_time >= NOW() - (%s * INTERVAL '1 day')"]
+    clauses = [_day_window("a.announcement_time")]
     params = [days]
     if query:
         clauses.append("(a.company_symbol ILIKE %s OR a.company_name ILIKE %s)")
@@ -559,7 +598,7 @@ def fetch_filings(days: int, symbol=None, status=None, query=None,
     `status` filters on the analysis outcome: ANALYZED / SKIPPED / FAILED /
     ALERT (cleared the formula) / PENDING (not reached yet).
     """
-    clauses = ["a.announcement_time >= NOW() - (%s * INTERVAL '1 day')"]
+    clauses = [_day_window("a.announcement_time")]
     params = [days]
 
     if symbol:
@@ -743,7 +782,7 @@ def save_volume_alert(v, session_date) -> bool:
 
 def fetch_volume_alerts(days: int, min_score: float = 0.0, symbol=None,
                         limit: int = 200):
-    clauses = ["session_date >= CURRENT_DATE - (%s * INTERVAL '1 day')",
+    clauses = [_day_window_date("session_date"),
                "score >= %s"]
     params = [days, min_score]
     if symbol:
@@ -768,7 +807,7 @@ def fetch_stats(days: int) -> dict:
                 COUNT(*) FILTER (WHERE conviction = 'WATCH')      AS watch,
                 COUNT(DISTINCT company_symbol)                    AS companies
             FROM stock_alerts
-            WHERE announced_at >= NOW() - (%s * INTERVAL '1 day')
+            WHERE announced_at >= (timezone('Asia/Kolkata', now())::date - ((%s - 1) * INTERVAL '1 day'))
             """,
             (days,),
         )
@@ -781,7 +820,7 @@ def fetch_stats(days: int) -> dict:
                 COUNT(*) FILTER (WHERE status = 'SKIPPED')      AS skipped,
                 COUNT(*) FILTER (WHERE status = 'FAILED')       AS failed
             FROM filing_analyses
-            WHERE created_at >= NOW() - (%s * INTERVAL '1 day')
+            WHERE created_at >= ((timezone('Asia/Kolkata', now())::date - ((%s - 1) * INTERVAL '1 day')) AT TIME ZONE 'Asia/Kolkata')
             """,
             (days,),
         )

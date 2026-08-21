@@ -1,8 +1,8 @@
 import React from "react";
 
-// 90 is the API's hard ceiling (see the Query bound in api.py). Useful when
-// testing against seeded historical filings, which are older than a live feed
-// would ever be.
+// These are CALENDAR days in IST, including today — not rolling 24-hour
+// windows. "Today" is today's session, so once the date rolls over this
+// morning's alerts move into "3 days". 90 is the API's hard ceiling.
 const WINDOWS = [
     { label: "Today", value: 1 },
     { label: "3 days", value: 3 },

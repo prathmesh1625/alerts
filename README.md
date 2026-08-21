@@ -612,6 +612,22 @@ back to pulling the document from the exchange on demand, so the first open of
 an older filing takes a moment. Filter by company, by outcome
 (alerts / read / skipped), by date window, or search filing titles.
 
+## Day filters are calendar days, in IST
+
+`days` means **calendar days including today**, not a rolling N × 24 hours. So
+"Today" is today's session: once the date rolls over, this morning's alerts
+leave "Today" and appear under "3 days".
+
+It was a rolling window, and that was wrong twice over. At 19:09 IST,
+`NOW() - 1 day` reached back to 19:09 the previous evening, so a filing made at
+22:03 **yesterday** was still served as "Today". And `announcement_time` holds
+IST — that is what both exchange feeds publish — while a container's `NOW()` is
+normally UTC, a 5h30m skew that moved filings across midnight on its own.
+
+Every window is now anchored to `timezone('Asia/Kolkata', now())::date`, and
+the alerts, stats, filings, companies and volume-alert queries all use the same
+helper — so the summary strip and the cards below it can never disagree.
+
 ## API
 
 | endpoint | purpose |
