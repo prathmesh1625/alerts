@@ -558,7 +558,7 @@ three headline numbers, a `breakdown` JSONB with the per-rule arithmetic, and
 
 ---
 
-## The dashboard has two views
+## The dashboard has three views
 
 **`/` — Alerts.** What cleared the formula, ranked by conviction. The answer to
 "what should I look at today?"
@@ -566,6 +566,23 @@ three headline numbers, a `breakdown` JSONB with the per-rule arithmetic, and
 **`/filings` — All filings.** Every filing the scraper collected, browsable by
 company, with the agent's verdict on each — *including the ones it skipped and
 the reason why*. The answer to "what came in, and was the screen right?"
+
+**`/market` — Live.** NSE last price, volume and turnover (₹ Cr), refreshed
+every 20s while you watch, with the day's movers sorted by turnover. Companies
+that also cleared the filing formula carry an **alert** badge — which is the
+only thing this view offers that NSE's own screen does not.
+
+Two limits, both NSE's rather than ours, and worth knowing before you rely on
+it. `equity-stockIndices`, the endpoint behind NSE's full ~250-row table,
+returns **404** since their Next.js rewrite, and `quote-equity` returns **403**
+(bot-protected). So this covers the stocks NSE reports movement in — around 90
+on a normal session — not the full listed universe, and an alerted company only
+shows a live price if it happens to be among them.
+
+Responses are cached server-side for 20s (10 minutes when the market is shut),
+so a hundred open tabs still cost NSE one request per cycle rather than a
+hundred. That matters: the requests come from the same server IP as the
+scraper.
 
 The second view exists because a screen you cannot audit is a screen you have to
 take on faith. It shows the skip reason, the raw signals the model extracted,
@@ -587,6 +604,7 @@ an older filing takes a moment. Filter by company, by outcome
 | `GET /api/stats?days=` | counts for the summary strip |
 | `GET /api/companies?days=&q=` | companies that filed, with per-company counts |
 | `GET /api/filings?days=&symbol=&status=&q=&limit=&offset=` | every filing + its verdict |
+| `GET /api/market` | live NSE prices/volume/turnover, cached, alert-tagged |
 | `GET /api/filings/{id}/pdf` | any filing's PDF (local → cache → download) |
 | `GET /api/alerts/{id}/pdf` | same, kept for the alert cards |
 | `GET /docs` | OpenAPI browser |

@@ -3,6 +3,7 @@ import { BrowserRouter, NavLink, Navigate, Route, Routes } from "react-router-do
 
 import Alerts from "./pages/Alerts.jsx";
 import Filings from "./pages/Filings.jsx";
+import Market from "./pages/Market.jsx";
 
 /**
  * The shell: chrome, navigation, and the two views.
@@ -10,6 +11,8 @@ import Filings from "./pages/Filings.jsx";
  *   /          alerts    — what cleared the formula, ranked by conviction
  *   /filings   research  — everything that came in, and what the agent made of
  *                          it, with the source PDF one click away
+ *   /market    live      — NSE prices, volume and turnover, refreshed while you
+ *                          watch, with alerted companies flagged
  */
 
 function Nav() {
@@ -27,6 +30,9 @@ function Nav() {
             </NavLink>
             <NavLink to="/filings" className={link}>
                 All filings
+            </NavLink>
+            <NavLink to="/market" className={link}>
+                Market
             </NavLink>
         </nav>
     );
@@ -77,6 +83,7 @@ export default function App() {
                 <Routes>
                     <Route path="/" element={<Alerts onUpdated={setLastUpdated} />} />
                     <Route path="/filings" element={<Filings />} />
+                    <Route path="/market" element={<Market />} />
                     <Route path="*" element={<Navigate to="/" replace />} />
                 </Routes>
 

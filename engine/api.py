@@ -17,6 +17,7 @@ from fastapi.responses import FileResponse
 
 import config
 import db
+import market
 import pdf_fetch
 from agent import resolve_pdf_path
 
@@ -202,6 +203,41 @@ def get_filings(
             r["score"] = float(r["score"])
     return {"window_days": days, "count": len(rows), "offset": offset,
             "filings": rows}
+
+
+@app.get("/api/market")
+def get_market(days: int = Query(default=30, ge=1, le=365)):
+    """
+    Live NSE prices, volume and turnover — the movers, refreshed from NSE and
+    cached server-side so many viewers cost one upstream request.
+
+    Each row is tagged with `has_alert` when that company also raised a filing
+    alert in the window. That cross-reference is the point of showing this here
+    at all: NSE already shows prices better than we can, but it cannot tell you
+    which of today's movers just filed something the screen liked.
+    """
+    snap = market.snapshot()
+
+    alerted = {}
+    try:
+        for a in db.fetch_alerts(days, 0.0, None, 1000):
+            sym = a["company_symbol"]
+            prev = alerted.get(sym)
+            if not prev or float(a["score"]) > prev["score"]:
+                alerted[sym] = {"score": float(a["score"]),
+                                "conviction": a["conviction"],
+                                "headline": a["headline"],
+                                "announcement_id": a["announcement_id"]}
+    except Exception as e:
+        # The market view must still render if the database is unavailable —
+        # it does not depend on it for its own data.
+        print("[api] market: alert cross-reference unavailable: {}".format(e), flush=True)
+
+    for s in snap["stocks"]:
+        s["alert"] = alerted.get(s["symbol"])
+
+    snap["alerted_symbols"] = len([s for s in snap["stocks"] if s["alert"]])
+    return snap
 
 
 @app.get("/api/filings/{announcement_id}/pdf")
