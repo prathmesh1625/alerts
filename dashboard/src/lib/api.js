@@ -23,8 +23,12 @@ async function get(path, params = {}) {
 }
 
 export const fetchAlerts = (params) => get("/api/alerts", params);
+export const fetchCompanies = (params) => get("/api/companies", params);
+export const fetchFilings = (params) => get("/api/filings", params);
 export const fetchStats = (params) => get("/api/stats", params);
 export const fetchConfig = () => get("/api/config");
 
+// Works for ANY filing, not just those that raised an alert — the API falls
+// back to downloading from the exchange when nothing is cached locally.
 export const pdfUrl = (announcementId) =>
-    `${BASE}/api/alerts/${announcementId}/pdf`;
+    `${BASE}/api/filings/${announcementId}/pdf`;

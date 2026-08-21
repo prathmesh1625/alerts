@@ -162,6 +162,8 @@ ALTER TABLE stock_alerts
 ANNOUNCEMENTS_PATCH_SQL = """
 ALTER TABLE announcements
     ADD COLUMN IF NOT EXISTS exchange VARCHAR(8);
+ALTER TABLE announcements
+    ADD COLUMN IF NOT EXISTS company_name TEXT;
 """
 
 
@@ -462,6 +464,131 @@ def fetch_alerts(days: int, min_score: float, symbol=None, limit: int = 200) -> 
     with get_cursor() as cur:
         cur.execute(sql, params)
         return [dict(r) for r in cur.fetchall()]
+
+
+# -----------------------------------------------------------------------------
+#  The filings browser
+#
+#  The alerts view answers "what should I look at?". This answers "what came in,
+#  and what did the agent make of it?" — including the filings that were skipped
+#  and why, which is the part you need when checking the screen's judgement
+#  rather than trusting it.
+# -----------------------------------------------------------------------------
+
+def fetch_companies(days: int, query=None, limit: int = 500) -> list:
+    """Every company with filings in the window, plus what we did with them."""
+    clauses = ["a.announcement_time >= NOW() - (%s * INTERVAL '1 day')"]
+    params = [days]
+    if query:
+        clauses.append("(a.company_symbol ILIKE %s OR a.company_name ILIKE %s)")
+        params += ["%{}%".format(query), "%{}%".format(query)]
+
+    sql = """
+        SELECT
+            a.company_symbol,
+            MAX(a.company_name)                                   AS company_name,
+            COUNT(*)                                              AS filings,
+            COUNT(f.id) FILTER (WHERE f.status = 'ANALYZED')       AS analyzed,
+            COUNT(f.id) FILTER (WHERE f.status = 'SKIPPED')        AS skipped,
+            COUNT(s.id)                                           AS alerts,
+            MAX(s.score)                                          AS best_score,
+            MAX(a.announcement_time)                              AS latest_filing
+        FROM announcements a
+        LEFT JOIN filing_analyses f ON f.announcement_id = a.id
+        LEFT JOIN stock_alerts    s ON s.announcement_id = a.id
+        WHERE {}
+        GROUP BY a.company_symbol
+        ORDER BY MAX(s.score) DESC NULLS LAST, MAX(a.announcement_time) DESC
+        LIMIT %s
+    """.format(" AND ".join(clauses))
+    params.append(limit)
+
+    with get_cursor() as cur:
+        cur.execute(sql, params)
+        return [dict(r) for r in cur.fetchall()]
+
+
+def fetch_filings(days: int, symbol=None, status=None, query=None,
+                  limit: int = 200, offset: int = 0) -> list:
+    """
+    Filings in the window with whatever the agent concluded about each.
+
+    `status` filters on the analysis outcome: ANALYZED / SKIPPED / FAILED /
+    ALERT (cleared the formula) / PENDING (not reached yet).
+    """
+    clauses = ["a.announcement_time >= NOW() - (%s * INTERVAL '1 day')"]
+    params = [days]
+
+    if symbol:
+        clauses.append("a.company_symbol = %s")
+        params.append(symbol.upper())
+    if query:
+        clauses.append("(a.company_symbol ILIKE %s OR a.company_name ILIKE %s "
+                       "OR a.title ILIKE %s)")
+        params += ["%{}%".format(query)] * 3
+    if status:
+        st = status.upper()
+        if st == "ALERT":
+            clauses.append("s.id IS NOT NULL")
+        elif st == "PENDING":
+            clauses.append("f.id IS NULL")
+        else:
+            clauses.append("f.status = %s")
+            params.append(st)
+
+    sql = """
+        SELECT
+            a.id                AS announcement_id,
+            a.company_symbol,
+            a.company_name,
+            a.title,
+            a.pdf_url,
+            a.local_path,
+            a.announcement_time AS announced_at,
+            COALESCE(a.exchange, 'NSE')          AS exchange,
+            COALESCE(f.status, 'PENDING')        AS status,
+            f.skip_reason,
+            f.error,
+            f.document_type,
+            f.score,
+            f.raw_signals,
+            s.id IS NOT NULL    AS is_alert,
+            s.conviction,
+            s.headline,
+            s.rules_hit
+        FROM announcements a
+        LEFT JOIN filing_analyses f ON f.announcement_id = a.id
+        LEFT JOIN stock_alerts    s ON s.announcement_id = a.id
+        WHERE {}
+        ORDER BY a.announcement_time DESC
+        LIMIT %s OFFSET %s
+    """.format(" AND ".join(clauses))
+    params += [limit, offset]
+
+    with get_cursor() as cur:
+        cur.execute(sql, params)
+        return [dict(r) for r in cur.fetchall()]
+
+
+def fetch_filing(announcement_id: int):
+    """One filing with its analysis, or None."""
+    with get_cursor() as cur:
+        cur.execute(
+            """
+            SELECT a.id AS announcement_id, a.company_symbol, a.company_name,
+                   a.title, a.pdf_url, a.local_path,
+                   a.announcement_time AS announced_at,
+                   COALESCE(a.exchange, 'NSE') AS exchange,
+                   COALESCE(f.status, 'PENDING') AS status,
+                   f.skip_reason, f.error, f.document_type, f.score, f.raw_signals
+            FROM announcements a
+            LEFT JOIN filing_analyses f ON f.announcement_id = a.id
+            WHERE a.id = %s
+            """,
+            (announcement_id,),
+        )
+        row = cur.fetchone()
+        return dict(row) if row else None
 
 
 def fetch_stats(days: int) -> dict:

@@ -558,6 +558,25 @@ three headline numbers, a `breakdown` JSONB with the per-rule arithmetic, and
 
 ---
 
+## The dashboard has two views
+
+**`/` — Alerts.** What cleared the formula, ranked by conviction. The answer to
+"what should I look at today?"
+
+**`/filings` — All filings.** Every filing the scraper collected, browsable by
+company, with the agent's verdict on each — *including the ones it skipped and
+the reason why*. The answer to "what came in, and was the screen right?"
+
+The second view exists because a screen you cannot audit is a screen you have to
+take on faith. It shows the skip reason, the raw signals the model extracted,
+and a **PDF** button on every row.
+
+That button works even for filings that were never downloaded — which is most of
+them, since the agent only fetches the ~12% it decides to read. The API falls
+back to pulling the document from the exchange on demand, so the first open of
+an older filing takes a moment. Filter by company, by outcome
+(alerts / read / skipped), by date window, or search filing titles.
+
 ## API
 
 | endpoint | purpose |
@@ -566,7 +585,10 @@ three headline numbers, a `breakdown` JSONB with the per-rule arithmetic, and
 | `GET /api/config` | the formula as the engine is actually running it |
 | `GET /api/alerts?days=&min_score=&symbol=&limit=` | alerts, strongest first |
 | `GET /api/stats?days=` | counts for the summary strip |
-| `GET /api/alerts/{id}/pdf` | the source filing |
+| `GET /api/companies?days=&q=` | companies that filed, with per-company counts |
+| `GET /api/filings?days=&symbol=&status=&q=&limit=&offset=` | every filing + its verdict |
+| `GET /api/filings/{id}/pdf` | any filing's PDF (local → cache → download) |
+| `GET /api/alerts/{id}/pdf` | same, kept for the alert cards |
 | `GET /docs` | OpenAPI browser |
 
 The dashboard renders its formula panel from `/api/config` rather than

@@ -17,6 +17,7 @@ from fastapi.responses import FileResponse
 
 import config
 import db
+import pdf_fetch
 from agent import resolve_pdf_path
 
 
@@ -163,28 +164,82 @@ def get_stats(days: int = Query(default=None, ge=1, le=90)):
     return stats
 
 
+@app.get("/api/companies")
+def get_companies(
+    days: int = Query(default=30, ge=1, le=365),
+    q: str = Query(default=None),
+    limit: int = Query(default=500, ge=1, le=2000),
+):
+    """Companies that filed in the window, with what the agent made of each."""
+    rows = _db_call(db.fetch_companies, days, q, limit)
+    for r in rows:
+        if r.get("best_score") is not None:
+            r["best_score"] = float(r["best_score"])
+    return {"window_days": days, "count": len(rows), "companies": rows}
+
+
+@app.get("/api/filings")
+def get_filings(
+    days: int = Query(default=30, ge=1, le=365),
+    symbol: str = Query(default=None),
+    status: str = Query(default=None,
+                        description="ANALYZED | SKIPPED | FAILED | ALERT | PENDING"),
+    q: str = Query(default=None),
+    limit: int = Query(default=200, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
+):
+    """
+    Every filing in the window, with the agent's verdict — including the ones it
+    skipped, and why.
+
+    The alerts endpoint answers "what should I look at?"; this one answers "what
+    came in, and was the screen right about it?", which is what you need to
+    audit the formula rather than trust it.
+    """
+    rows = _db_call(db.fetch_filings, days, symbol, status, q, limit, offset)
+    for r in rows:
+        if r.get("score") is not None:
+            r["score"] = float(r["score"])
+    return {"window_days": days, "count": len(rows), "offset": offset,
+            "filings": rows}
+
+
+@app.get("/api/filings/{announcement_id}/pdf")
+def get_filing_pdf(announcement_id: int):
+    """
+    Serve ANY filing's PDF — not only the ones that raised an alert.
+
+    Resolution order: a local file if a scraper shares its volume, then the
+    download cache, then a fresh download. That last step is what makes this
+    work in standalone mode, where the vast majority of filings were never
+    downloaded because the agent decided they weren't worth reading — which is
+    exactly the set you want to spot-check by hand.
+    """
+    row = _db_call(db.fetch_filing, announcement_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="filing not found")
+
+    path = resolve_pdf_path(row.get("local_path")) or pdf_fetch.download(row.get("pdf_url"))
+    if not path:
+        raise HTTPException(
+            status_code=404,
+            detail="PDF could not be retrieved from the exchange (it may have "
+                   "been withdrawn, or not yet published to the CDN)",
+        )
+
+    # A readable filename, since these get saved for offline analysis.
+    stamp = row.get("announced_at")
+    nice = "{}_{}.pdf".format(
+        row.get("company_symbol") or "filing",
+        stamp.strftime("%Y-%m-%d") if hasattr(stamp, "strftime") else "filing",
+    )
+    return FileResponse(path, media_type="application/pdf", filename=nice)
+
+
 @app.get("/api/alerts/{announcement_id}/pdf")
 def get_pdf(announcement_id: int):
-    """Serve the source filing, so 'view PDF' on a card actually opens it."""
-    with db.get_cursor() as cur:
-        cur.execute(
-            "SELECT local_path, company_symbol FROM stock_alerts WHERE announcement_id = %s",
-            (announcement_id,),
-        )
-        row = cur.fetchone()
-
-    if not row:
-        raise HTTPException(status_code=404, detail="alert not found")
-
-    path = resolve_pdf_path(row["local_path"])
-    if not path:
-        raise HTTPException(status_code=404, detail="PDF not available on this host")
-
-    return FileResponse(
-        path,
-        media_type="application/pdf",
-        filename=os.path.basename(path),
-    )
+    """Kept for the alert cards; same behaviour as the filings endpoint."""
+    return get_filing_pdf(announcement_id)
 
 
 if __name__ == "__main__":
