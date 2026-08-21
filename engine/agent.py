@@ -201,6 +201,16 @@ def process_filing(filing: dict) -> str:
             fingerprint=fingerprint or None,
         )
 
+        # Safety net. The prefilter catches presentations and transcripts by
+        # title and by document shape, but a deck with an uninformative title
+        # and few slide markers can still get this far - and it would alert on
+        # figures the screen already reported when the results were filed.
+        # The model has read the whole document by now, so its own
+        # classification is the better judge at this point.
+        if (signals.document_type or "").upper() in ("PRESENTATION", "TRANSCRIPT"):
+            return "{} ---   {} restates published results".format(
+                symbol, signals.document_type.lower())
+
         if not result["qualifies"]:
             return "{} ---   score {:.1f} (below {:.0f})".format(
                 symbol, result["score"], config.ALERT_MIN_SCORE

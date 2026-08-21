@@ -136,11 +136,29 @@ magnitude.
 The gate checks in this order, so a misleading title can never discard a real
 filing:
 
+0. title or body is a presentation / call transcript / annual report → **skip**
 1. title indicates results or an order win → **analyse**
 2. body contains a results statement → **analyse**
 3. body describes an order win with a value → **analyse**
 4. title is a known-routine compliance filing → **skip**
 5. otherwise → **skip**
+
+Step 0 is checked FIRST, ahead of every positive signal, and that ordering is
+the point. An investor presentation or an earnings-call transcript contains a
+genuine results table, so every test below it passes — the numbers are real.
+But they are numbers already published and already alerted on when the results
+were filed, so letting one through produces a **duplicate alert days later on
+stale data**. Annual reports and BRSRs restate a year already reported at Q4,
+so they go the same way.
+
+Measured on live data: **24 of 40 alerts were restatements** — earnings-call
+transcripts, investor presentations and Reg. 34(1) annual reports — and 29 of
+400 filings were being sent to the model for nothing.
+
+Transcript detection reuses `bot/output.py`'s marker approach, including its
+rule that **two** markers must clear their thresholds: results filings often
+say "an earnings call will be held on…" once, and one mention must not
+disqualify them.
 
 Every decision is written to `filing_analyses` with its reason, so a skip is an
 auditable choice rather than a silent drop. Set `PREFILTER_ENABLED=false` to

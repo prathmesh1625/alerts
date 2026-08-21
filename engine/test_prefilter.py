@@ -185,6 +185,92 @@ def test_title_screen_can_be_disabled():
         config.SKIP_BY_TITLE = old
 
 
+# --- presentations and transcripts restate results, they do not report them ---
+#
+# These pass every results test — the numbers in them are real — but they are
+# numbers already published and already alerted on, so letting one through
+# produces a duplicate alert days later on stale data.
+
+DECK = """
+    Q2 FY26 Investor Presentation
+    Disclaimer: This presentation has been prepared by the Company.
+    This presentation contains forward-looking statements. Safe Harbour.
+    Revenue from operations 45,231 Total income 46,043 Profit after tax 5,180
+    Profit before tax 6,923 Earnings per share 4.15 quarter ended
+"""
+
+TRANSCRIPT = """
+    Moderator: Ladies and gentlemen, good day and welcome to the Q2 FY26
+    earnings conference call of the Company. Moderator: We will now begin the
+    question-and-answer session. Moderator: The next question is from the line
+    of an analyst. Revenue from operations grew to 45,231 lakh and profit after
+    tax was 5,180 lakh for the quarter ended.
+"""
+
+
+def test_presentation_titles_are_not_opened():
+    for title in ("Investor Presentation",
+                  "Q2 FY26 Earnings Presentation",
+                  "Corporate Presentation",
+                  "Results Presentation",
+                  "Analyst Presentation"):
+        ok, why = should_open_pdf(title)
+        assert not ok, "opened a presentation: {}".format(title)
+        assert "not opened" in why
+
+
+def test_transcript_titles_are_not_opened():
+    for title in ("Transcript of the Q2 FY26 Earnings Call",
+                  "Audio recording of the conference call",
+                  "Analysts/Institutional Investor Meet/Con. Call Updates",
+                  "Intimation of Analyst Meet"):
+        assert not should_open_pdf(title)[0], title
+
+
+def test_a_deck_with_an_innocent_title_is_caught_by_its_body():
+    """
+    Title gives nothing away, and the body contains a genuine results table —
+    so every results test passes. Only the slide-deck markers stop it.
+    """
+    ok, why = should_analyze("Submission under Regulation 30", DECK)
+    assert not ok, "a presentation reached the model"
+    assert "presentation" in why
+
+
+def test_a_transcript_with_an_innocent_title_is_caught_by_its_body():
+    ok, why = should_analyze("Intimation to Stock Exchange", TRANSCRIPT)
+    assert not ok, "a transcript reached the model"
+    assert "transcript" in why
+
+
+def test_a_real_results_filing_is_still_analysed():
+    """The exclusion must not swallow the filings the screen exists for."""
+    ok, _ = should_analyze("Financial Results for the quarter ended 30.09.2025",
+                           RESULTS_BODY)
+    assert ok
+
+
+def test_a_results_filing_mentioning_a_call_once_is_still_analysed():
+    """
+    Results filings routinely say "an earnings call will be held on...". One
+    mention must not disqualify them — hence the two-marker rule.
+    """
+    body = RESULTS_BODY + "\nAn earnings call will be held on 5 November 2025."
+    ok, _ = should_analyze("Outcome of Board Meeting", body)
+    assert ok
+
+
+def test_a_results_filing_with_one_disclaimer_is_still_analysed():
+    body = RESULTS_BODY + "\nDisclaimer: figures are subject to audit."
+    ok, _ = should_analyze("Financial Results", body)
+    assert ok
+
+
+def test_an_order_win_is_never_mistaken_for_a_deck():
+    ok, _ = should_analyze("Receipt of Order", ORDER_BODY)
+    assert ok
+
+
 if __name__ == "__main__":
     passed = failed = 0
     for name, fn in sorted(globals().items()):

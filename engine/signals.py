@@ -114,10 +114,15 @@ class FilingSignals(BaseModel):
     document_type: str = Field(
         default="OTHER",
         description=(
-            "One of: RESULTS (quarterly/annual financial results), "
-            "ORDER_WIN (bagging of a new order/contract/LoA/work order), "
-            "BOTH, or OTHER (anything else — governance, AGM notices, "
-            "shareholding patterns, credit ratings, transcripts)."
+            "One of: RESULTS (quarterly/annual financial results being "
+            "reported for the first time), ORDER_WIN (bagging of a new "
+            "order/contract/LoA/work order), BOTH, PRESENTATION (an investor "
+            "or earnings slide deck), TRANSCRIPT (an earnings-call or analyst "
+            "meet transcript), or OTHER (anything else - governance, AGM "
+            "notices, shareholding patterns, credit ratings). "
+            "PRESENTATION and TRANSCRIPT matter: they repeat figures already "
+            "published elsewhere, so label them as such even though they "
+            "contain a real results table."
         ),
     )
 

@@ -71,6 +71,84 @@ _ORDER_AMOUNT = re.compile(
 )
 
 
+# ── documents that RESTATE results rather than report them ───────────────────
+#
+# An investor presentation or an earnings-call transcript repeats last
+# quarter's figures. Every growth test passes on them — the numbers are real —
+# but they are numbers the screen has already seen and alerted on, so they
+# produce a duplicate alert days later on stale data.
+#
+# The title list extends bot/output.py's `_NON_RESULTS_TITLE_RE`, which covers
+# transcripts and meets but not presentations.
+_RESTATES_RESULTS_TITLE = re.compile(
+    r"transcript|audio recording|audio link|earnings call|conference call|"
+    r"con\.?\s*call|analyst meet|investor meet|analyst day|investor day|"
+    r"(?:investor|earnings|corporate|results?|analyst|institutional)"
+    r"[\s\-]*presentation|"
+    r"presentation\s+(?:to|for)\s+(?:investors|analysts)|"
+    r"schedule of (?:analyst|investor)|intimation of (?:analyst|investor)|"
+    # Annual reports restate a year already reported at Q4 - the same defect,
+    # found in live data: four of 39 alerts were "Reg. 34 (1) Annual Report".
+    r"annual report|reg\.?\s*34\s*\(1\)|regulation 34\s*\(1\)|"
+    # Business-responsibility and sustainability reports are an annual-report
+    # annexe; one 106k-character BRSR already slipped past the body prefilter.
+    r"brsr|business responsibility",
+    re.IGNORECASE,
+)
+
+# Dialogue shape, for a transcript whose title does not say so. Lifted from
+# bot/output.py's `_TRANSCRIPT_MARKERS`, including its rule that TWO markers
+# must clear their thresholds — one passing mention of a call is not enough.
+_TRANSCRIPT_MARKERS = (
+    (re.compile(r"\bmoderator\b", re.IGNORECASE), 3),
+    (re.compile(r"\bnext question\b", re.IGNORECASE), 2),
+    (re.compile(r"ladies and gentlemen", re.IGNORECASE), 1),
+    (re.compile(r"question[\s\-]?and[\s\-]?answer session", re.IGNORECASE), 1),
+    (re.compile(r"\bearnings (?:conference )?call\b", re.IGNORECASE), 2),
+    (re.compile(r"\bconference call\b", re.IGNORECASE), 2),
+)
+
+# A slide deck's own furniture. Same two-marker rule, so a results PDF that
+# happens to say "safe harbour" once is unaffected.
+_PRESENTATION_MARKERS = (
+    (re.compile(r"safe harbou?r", re.IGNORECASE), 1),
+    (re.compile(r"this presentation", re.IGNORECASE), 2),
+    (re.compile(r"forward[\s\-]looking statements", re.IGNORECASE), 1),
+    (re.compile(r"\bdisclaimer\b", re.IGNORECASE), 2),
+    (re.compile(r"investor presentation", re.IGNORECASE), 1),
+    (re.compile(r"\bQ[1-4]\s*FY\s*\d{2,4}\s+(?:earnings|results)\s+presentation",
+                re.IGNORECASE), 1),
+)
+
+
+def _markers_clear(text: str, markers) -> int:
+    return sum(1 for rx, threshold in markers if len(rx.findall(text)) >= threshold)
+
+
+def restates_old_results(title: str, text: str = "") -> tuple:
+    """
+    True when this document REPEATS results rather than reporting them.
+
+    Returns (is_restatement, reason).
+
+    Deliberately checked BEFORE the positive results/order signals: a deck
+    titled "Q2 FY26 Investor Presentation" contains a genuine results table,
+    so every body test passes and only this check can stop it.
+    """
+    title = title or ""
+    if _RESTATES_RESULTS_TITLE.search(title):
+        return True, "presentation/call material, not a fresh result"
+
+    if not text:
+        return False, ""
+
+    if _markers_clear(text, _TRANSCRIPT_MARKERS) >= 2:
+        return True, "reads as an earnings-call transcript"
+    if _markers_clear(text, _PRESENTATION_MARKERS) >= 2:
+        return True, "reads as an investor presentation"
+    return False, ""
+
+
 def should_open_pdf(title: str) -> tuple:
     """
     Decide from the TITLE ALONE whether this PDF is worth opening at all.
@@ -102,6 +180,12 @@ def should_open_pdf(title: str) -> tuple:
         # so fall through to the full read rather than guess.
         return True, "no title to screen on"
 
+    # Checked BEFORE the positive signals: "Q2 FY26 Results Presentation"
+    # matches _RESULTS_TITLE, but it restates figures already alerted on.
+    restated, why = restates_old_results(title)
+    if restated:
+        return False, "{}, not opened".format(why)
+
     # A positive signal always wins, even if a never-relevant pattern also
     # matches somewhere in the same caption.
     if _RESULTS_TITLE.search(title) or _ORDER_TITLE.search(title):
@@ -126,6 +210,13 @@ def should_analyze(title: str, text: str) -> tuple:
 
     if not text.strip():
         return False, "no extractable text (scanned PDF, OCR recovered nothing)"
+
+    # Checked FIRST, and even when the prefilter is disabled: a presentation
+    # repeating last quarter's numbers passes every results test below, so this
+    # is the only thing standing between it and a duplicate alert on stale data.
+    restated, why = restates_old_results(title, text)
+    if restated:
+        return False, why
 
     if not config.PREFILTER_ENABLED:
         return True, "prefilter disabled"
