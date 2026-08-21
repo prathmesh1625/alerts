@@ -19,13 +19,20 @@ export default function VolumeAlerts({ days = 5 }) {
 
     useEffect(() => {
         let alive = true;
+        const load = () =>
+            fetchVolumeAlerts({ days })
+                .then((r) => alive && setAlerts(r.alerts || []))
+                .catch((e) => alive && setError(e.message))
+                .finally(() => alive && setLoading(false));
+
         setLoading(true);
-        fetchVolumeAlerts({ days })
-            .then((r) => alive && setAlerts(r.alerts || []))
-            .catch((e) => alive && setError(e.message))
-            .finally(() => alive && setLoading(false));
+        load();
+        // Spikes are detected during the session, so this list changes while
+        // the market is open. Matches the worker's intraday interval.
+        const id = setInterval(load, 60_000);
         return () => {
             alive = false;
+            clearInterval(id);
         };
     }, [days]);
 
@@ -76,8 +83,14 @@ export default function VolumeAlerts({ days = 5 }) {
                                         key={`${a.symbol}-${a.session_date}`}
                                         className="flex flex-wrap items-center gap-x-4 gap-y-1 border-b border-brand-border/40 px-5 py-2.5 last:border-0 hover:bg-brand-bg2/40"
                                     >
-                                        <span className="w-28 shrink-0 font-medium text-brand-light">
+                                        <span className="flex w-28 shrink-0 items-center gap-1.5 font-medium text-brand-light">
                                             {a.symbol}
+                                            {a.is_intraday && (
+                                                <span
+                                                    title="Detected during today's session; confirmed after the close"
+                                                    className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-band-strong"
+                                                />
+                                            )}
                                         </span>
 
                                         <span
@@ -122,8 +135,11 @@ export default function VolumeAlerts({ days = 5 }) {
                         trailing <strong className="text-brand-slate">median</strong> AND
                         the highest in the window — so a stock that has merely been busy
                         lately stays quiet, and a run is reported once rather than every
-                        day. Scored separately from the three filing rules; it does not
-                        change their scores.
+                        day. Detection runs <strong className="text-brand-slate">during
+                        the session</strong> as well as after the close, so a stock
+                        that spikes on Monday morning appears on Monday morning — a
+                        pulsing dot marks one still being confirmed. Scored separately
+                        from the three filing rules; it does not change their scores.
                     </p>
                 </div>
             )}

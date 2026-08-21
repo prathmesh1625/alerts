@@ -612,6 +612,32 @@ back to pulling the document from the exchange on demand, so the first open of
 an older filing takes a moment. Filter by company, by outcome
 (alerts / read / skipped), by date window, or search filing titles.
 
+## Rule 4 runs live, not only after the close
+
+A spike is detected **during the session** off the live movers feed, and again
+after the close from Bhavcopy with the final figure. So a stock that spikes on
+Monday morning appears on the dashboard on Monday morning; a pulsing dot marks
+an alert still to be confirmed. `UNIQUE(symbol, session_date)` means the
+end-of-day pass **updates** the intraday row rather than duplicating it, and a
+confirmed alert can never be flipped back to provisional.
+
+**There is deliberately no scaling for how much of the session has elapsed**,
+and that is the whole design. Intraday volume is U-shaped — heavy at the open,
+thin at midday, heavy at the close — so scaling a daily baseline by "fraction
+of session elapsed" reports every normal stock as a 2–3× spike in the first
+fifteen minutes. Instead the rule asks whether volume-so-far has **already
+exceeded N× a normal whole day**. That needs no curve, cannot false-positive at
+the open, and is simply harder to trigger early — which is correct, because
+early in the day there is less evidence.
+
+`test_no_time_of_day_input_is_required` fails if `detect_spike` ever grows a
+clock argument, so reintroducing the curve problem has to be a deliberate act.
+
+Baselines still come from Bhavcopy, covering the whole market, while today's
+volume comes from the live feed. A stock that spikes is by definition moving,
+so it appears in the movers feed on the day it matters — but the feed alone
+could never have supplied its quiet baseline.
+
 ## Day filters are calendar days, in IST
 
 `days` means **calendar days including today**, not a rolling N × 24 hours. So

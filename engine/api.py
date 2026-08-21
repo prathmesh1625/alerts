@@ -235,6 +235,7 @@ def get_volume_alerts(
     """
     rows = _db_call(db.fetch_volume_alerts, days, min_score, symbol, limit)
     for r in rows:
+        r["is_intraday"] = bool(r.get("is_intraday"))
         for k in ("score", "ratio", "turnover_cr", "close", "pct_change"):
             if r.get(k) is not None:
                 r[k] = float(r[k])

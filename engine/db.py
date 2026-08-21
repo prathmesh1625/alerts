@@ -194,6 +194,15 @@ ALTER TABLE filing_analyses
     ADD COLUMN IF NOT EXISTS fingerprint VARCHAR(32);
 ALTER TABLE stock_alerts
     ADD COLUMN IF NOT EXISTS exchange VARCHAR(8);
+-- Rule 4 fires twice for the same session: once intraday off the live feed the
+-- moment volume-so-far clears the bar, and again after the close from Bhavcopy
+-- with the final figure. UNIQUE(symbol, session_date) means the second UPDATES
+-- the first rather than duplicating it, and this column says which you are
+-- looking at.
+ALTER TABLE volume_alerts
+    ADD COLUMN IF NOT EXISTS is_intraday BOOLEAN DEFAULT FALSE;
+ALTER TABLE volume_alerts
+    ADD COLUMN IF NOT EXISTS detected_at TIMESTAMPTZ DEFAULT NOW();
 """
 
 # `announcements.exchange` belongs to the bse-scraper, which creates it in its
@@ -756,16 +765,55 @@ def sessions_between(symbol, start_date, end_date):
         return int(row[0]) if row else 0
 
 
-def save_volume_alert(v, session_date) -> bool:
+def fetch_baselines(symbols, before_date):
+    """
+    Trailing volume baselines for the given symbols, from sessions BEFORE
+    `before_date`.
+
+    Used by the intraday pass: today's volume comes from the live feed, but the
+    history it is judged against comes from Bhavcopy, which covers the whole
+    market. That split is what lets a stock which was quiet all month be caught
+    on the morning it explodes - the live movers feed alone would never have
+    shown it before today.
+    """
+    if not symbols:
+        return {}
+    sql = """
+        SELECT symbol,
+               ARRAY_AGG(volume ORDER BY session_date DESC) AS history,
+               (SELECT MAX(va.session_date) FROM volume_alerts va
+                 WHERE va.symbol = dv.symbol AND va.session_date < %(d)s) AS last_alert
+        FROM (
+            SELECT symbol, volume, session_date,
+                   ROW_NUMBER() OVER (PARTITION BY symbol
+                                      ORDER BY session_date DESC) AS rn
+            FROM daily_volume
+            WHERE symbol = ANY(%(syms)s) AND session_date < %(d)s
+        ) dv
+        WHERE dv.rn <= %(n)s
+        GROUP BY symbol
+    """
+    with get_cursor() as cur:
+        cur.execute(sql, {"syms": list(symbols), "d": before_date,
+                          "n": config.VOLUME_LOOKBACK_SESSIONS})
+        return {r["symbol"]: dict(r) for r in cur.fetchall()}
+
+
+def save_volume_alert(v, session_date, is_intraday=False) -> bool:
     sql = """
         INSERT INTO volume_alerts
             (symbol, session_date, volume, baseline_median, baseline_max,
              baseline_sessions, ratio, turnover_cr, close, pct_change,
-             score, conviction, headline, reason)
-        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+             score, conviction, headline, reason, is_intraday, detected_at)
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW())
         ON CONFLICT (symbol, session_date) DO UPDATE SET
             score = EXCLUDED.score, ratio = EXCLUDED.ratio,
-            conviction = EXCLUDED.conviction, headline = EXCLUDED.headline
+            volume = EXCLUDED.volume, turnover_cr = EXCLUDED.turnover_cr,
+            close = EXCLUDED.close, pct_change = EXCLUDED.pct_change,
+            conviction = EXCLUDED.conviction, headline = EXCLUDED.headline,
+            -- The end-of-day pass confirms an intraday alert; it must never
+            -- flip a confirmed row back to provisional.
+            is_intraday = volume_alerts.is_intraday AND EXCLUDED.is_intraday
         RETURNING id
     """
     with get_cursor(dict_rows=False) as cur:
@@ -775,7 +823,7 @@ def save_volume_alert(v, session_date) -> bool:
             int(v["baseline_max"]) if v.get("baseline_max") else None,
             v.get("baseline_sessions"), v.get("ratio"), v.get("turnover_cr"),
             v.get("close"), v.get("pct_change"), v["score"],
-            v["conviction"], v.get("headline"), v.get("reason"),
+            v["conviction"], v.get("headline"), v.get("reason"), is_intraday,
         ))
         return cur.fetchone() is not None
 

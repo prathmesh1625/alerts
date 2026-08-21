@@ -212,6 +212,48 @@ def test_the_filing_rules_are_untouched():
 
 # -----------------------------------------------------------------------------
 
+# -----------------------------------------------------------------------------
+#  Intraday detection
+#
+#  The same detect_spike runs during the session against volume-so-far. There
+#  is deliberately NO scaling for how much of the session has elapsed: intraday
+#  volume is U-shaped, so scaling a daily baseline by "fraction elapsed" reports
+#  every normal stock as a 2-3x spike in the first fifteen minutes.
+# -----------------------------------------------------------------------------
+
+def test_partial_day_volume_below_the_bar_stays_quiet():
+    """
+    Mid-morning, a stock has traded twice its usual FULL day. Heavy, but not yet
+    past the 5x bar — and it must not be scaled up to look like one.
+    """
+    median = volume.summarise_baseline(CALM)["median"]
+    v = volume.detect_spike("T", today(median * 2), CALM)
+    assert v["hit"] is False
+    assert "below" in v["reason"]
+
+
+def test_partial_day_volume_over_the_bar_fires_immediately():
+    """
+    By 11am it has already traded 6x a normal WHOLE day. That is unambiguous
+    without knowing the time — which is exactly why no curve is needed.
+    """
+    median = volume.summarise_baseline(CALM)["median"]
+    v = volume.detect_spike("T", today(median * 6), CALM)
+    assert v["hit"] is True
+
+
+def test_no_time_of_day_input_is_required():
+    """
+    detect_spike takes no clock. If it ever grows one, the U-shaped-curve
+    problem comes back with it — this test is here to make that a deliberate
+    decision rather than an accident.
+    """
+    import inspect
+    params = set(inspect.signature(volume.detect_spike).parameters)
+    assert not (params & {"now", "session_fraction", "elapsed", "time_of_day"}), \
+        "detect_spike gained a time input; see the U-curve note in config.py"
+
+
 if __name__ == "__main__":
     passed = failed = 0
     for name, fn in sorted(globals().items()):

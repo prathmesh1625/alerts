@@ -232,6 +232,25 @@ VOLUME_MIN_BASELINE_SHARES = _float("VOLUME_MIN_BASELINE_SHARES", 20000.0)
 # signal. Set negative (e.g. -100) to alert on heavy volume in either direction.
 VOLUME_MIN_PRICE_CHANGE_PCT = _float("VOLUME_MIN_PRICE_CHANGE_PCT", 0.0)
 
+# --- intraday detection -----------------------------------------------------
+#
+# Rule 4 also runs DURING the session, off the live movers feed, so a stock that
+# spikes on Monday morning appears on the dashboard on Monday morning rather
+# than after the close.
+#
+# It compares volume-so-far against the FULL-DAY median, with no scaling for how
+# much of the session has elapsed. That is deliberate. Intraday volume is
+# U-shaped - heavy at the open, thin at midday, heavy at the close - so scaling
+# a daily baseline by "fraction of session elapsed" reports every normal stock
+# as a 2-3x spike in the first fifteen minutes. Requiring volume-so-far to
+# ALREADY exceed N x a whole normal day needs no curve, cannot false-positive at
+# the open, and is simply harder to trigger early in the day - which is correct,
+# because early in the day there is less evidence.
+VOLUME_INTRADAY_ENABLED = _bool("VOLUME_INTRADAY_ENABLED", True)
+# How often to re-check during market hours. The market snapshot is itself
+# cached, so this costs one NSE request per interval no matter how many stocks.
+VOLUME_INTRADAY_INTERVAL_SEC = _int("VOLUME_INTRADAY_INTERVAL_SEC", 300)
+
 # How many sessions of Bhavcopy to pull on a cold start.
 BHAVCOPY_BACKFILL_SESSIONS = _int("BHAVCOPY_BACKFILL_SESSIONS", 25)
 

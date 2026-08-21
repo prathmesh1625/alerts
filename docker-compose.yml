@@ -209,6 +209,11 @@ services:
       # First boot pulls this many days of Bhavcopy to build baselines. The
       # rule stays silent for any stock with fewer than VOLUME_MIN_SESSIONS.
       - BHAVCOPY_BACKFILL_SESSIONS=${ALERT_BHAVCOPY_BACKFILL:-30}
+      # Detect spikes DURING the session too, not only after the close, so a
+      # stock that spikes on Monday morning shows up on Monday morning. Costs
+      # one cached market snapshot per interval regardless of how many stocks.
+      - VOLUME_INTRADAY_ENABLED=${ALERT_VOLUME_INTRADAY:-true}
+      - VOLUME_INTRADAY_INTERVAL_SEC=${ALERT_VOLUME_INTRADAY_INTERVAL:-300}
     depends_on:
       alert-db:
         condition: service_healthy

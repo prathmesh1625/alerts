@@ -21,9 +21,12 @@ import sys
 import time
 import traceback
 
+import datetime as dt
+
 import bhavcopy
 import config
 import db
+import market
 import volume
 
 
@@ -86,6 +89,57 @@ def detect_for_session(session_date) -> dict:
     return {"examined": len(candidates), "alerts": fired, "reasons": reasons}
 
 
+def intraday_pass() -> dict:
+    """
+    Detect spikes DURING the session, from the live movers feed.
+
+    Baselines come from Bhavcopy (the whole market), today's volume from the
+    live feed. A stock that spikes is by definition moving, so it appears in
+    the movers feed on the day it matters - while the feed alone could never
+    have supplied its quiet baseline.
+
+    No session-fraction scaling: see the note on VOLUME_INTRADAY_ENABLED. The
+    same detect_spike is used as end-of-day, so an intraday alert and its
+    confirmation cannot disagree about what counts as a spike.
+    """
+    snap = market.snapshot()
+    if not snap["status"].get("is_open"):
+        return {"skipped": "market closed"}
+
+    stocks = snap["stocks"]
+    if not stocks:
+        return {"examined": 0, "alerts": 0}
+
+    today = dt.date.today()
+    baselines = db.fetch_baselines([s["symbol"] for s in stocks], today)
+
+    fired = 0
+    for s in stocks:
+        b = baselines.get(s["symbol"])
+        if not b:
+            continue   # no Bhavcopy history yet for this symbol
+
+        since = None
+        if b.get("last_alert"):
+            since = db.sessions_between(s["symbol"], b["last_alert"], today)
+
+        verdict = volume.detect_spike(
+            s["symbol"],
+            {"volume": s.get("volume"), "turnover_cr": s.get("turnover_cr"),
+             "close": s.get("ltp"), "prev_close": s.get("prev_close")},
+            [v for v in (b.get("history") or []) if v],
+            sessions_since_last_alert=since,
+        )
+        if verdict["hit"]:
+            verdict["conviction"] = volume.conviction_band(verdict["score"])
+            db.save_volume_alert(verdict, today, is_intraday=True)
+            fired += 1
+            print("[volume] LIVE  {:<12} {}  score {:.1f}".format(
+                verdict["symbol"], verdict["headline"], verdict["score"]), flush=True)
+
+    return {"examined": len(stocks), "alerts": fired}
+
+
 def run_once(backfill=None) -> None:
     db.ensure_schema()
     added = sync_sessions(backfill)
@@ -131,15 +185,31 @@ def main() -> None:
         return
 
     first = True
+    last_eod = 0.0
     while True:
         try:
-            run_once(args.backfill if first else 5)
-            first = False
+            # End-of-day pass: sync Bhavcopy and score the full session. Hourly,
+            # because Bhavcopy is published once a day and anything faster just
+            # collects 404s.
+            if first or (time.time() - last_eod) >= 3600:
+                run_once(args.backfill if first else 5)
+                last_eod = time.time()
+                first = False
+
+            # Intraday pass: only while the market is actually open.
+            if config.VOLUME_INTRADAY_ENABLED:
+                r = intraday_pass()
+                if r.get("skipped"):
+                    pass                       # market shut; nothing to say
+                elif r["alerts"]:
+                    print("[volume] intraday: {} of {} movers spiking".format(
+                        r["alerts"], r["examined"]), flush=True)
         except Exception as e:
             print("[volume] cycle error: {}".format(e), file=sys.stderr)
             traceback.print_exc(file=sys.stderr)
-        # Hourly: Bhavcopy appears once a day, so anything faster just 404s.
-        time.sleep(3600)
+
+        time.sleep(config.VOLUME_INTRADAY_INTERVAL_SEC
+                   if config.VOLUME_INTRADAY_ENABLED else 3600)
 
 
 if __name__ == "__main__":
