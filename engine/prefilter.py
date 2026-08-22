@@ -26,6 +26,19 @@ from pdf_text import count_metric_terms, looks_like_financial_results
 _NEVER_RELEVANT_TITLE = re.compile(
     r"trading window|shareholding pattern|closure of trading|"
     r"notice of (?:agm|egm|postal ballot)|scrutinizer|voting results|"
+    # The spelled-out form, with the ordinal exchanges put in it ("Notice Of
+    # 29Th Annual General Meeting"). The abbreviation above missed all of them:
+    # 21 such filings were in a 900-filing sample and 5 had been sent to the
+    # model, producing no alerts.
+    r"notice of\s+(?:the\s+)?(?:\d+\s*(?:st|nd|rd|th)\s*)?"
+    r"(?:agm|annual general meeting)|"
+    # A REGULATORY order - a penalty, demand or adjudication passed AGAINST the
+    # company - is not an order win. This is not merely noise: "Action(s) taken
+    # or orders passed" was being reported as "Order win Rs 364.73 Cr" for
+    # ICICIPRULI, turning enforcement action into a buy signal.
+    r"action\(?s?\)? taken or orders? passed|"
+    r"orders? passed by|penalty|adjudicat|show cause|demand notice|"
+    r"prosecution|search and seizure|"
     r"reg\.?\s*7\(3\)|certificate under regulation 7|"
     r"compliance certificate|investor complaint|grievance redressal|"
     r"loss of share certificate|duplicate share|"
@@ -84,12 +97,23 @@ _RESTATES_RESULTS_TITLE = re.compile(
     r"transcript|audio recording|audio link|earnings call|conference call|"
     r"con\.?\s*call|analyst meet|investor meet|analyst day|investor day|"
     r"(?:investor|earnings|corporate|results?|analyst|institutional)"
-    r"[\s\-]*presentation|"
-    r"presentation\s+(?:to|for)\s+(?:investors|analysts)|"
+    # "presentaion" and "presentaton" are common misspellings in filed titles,
+    # and a title is typed by hand at the company that files it.
+    r"[\s\-]*presenta(?:tion|ion|ton)|"
+    r"presenta(?:tion|ion|ton)\s+(?:to|for)\s+(?:investors|analysts)|"
     r"schedule of (?:analyst|investor)|intimation of (?:analyst|investor)|"
     # Annual reports restate a year already reported at Q4 - the same defect,
     # found in live data: four of 39 alerts were "Reg. 34 (1) Annual Report".
-    r"annual report|reg\.?\s*34\s*\(1\)|regulation 34\s*\(1\)|"
+    #
+    # Regulation 34 is the annual report; 36(1)(b) is the copy sent to members.
+    # Both are last year's numbers. Regulation 33 is deliberately ABSENT: that
+    # is the regulation quarterly RESULTS are filed under, so excluding it would
+    # suppress the filings this screen exists to catch.
+    r"annual report|"
+    r"reg(?:ulation)?\.?\s*34\b|"
+    r"reg(?:ulation)?\.?\s*36\s*\(\s*1\s*\)|"
+    # The machine-readable XBRL copy of a results table already filed as a PDF.
+    r"machine[\s\-]?readable|"
     # Business-responsibility and sustainability reports are an annual-report
     # annexe; one 106k-character BRSR already slipped past the body prefilter.
     r"brsr|business responsibility",
@@ -118,6 +142,18 @@ _PRESENTATION_MARKERS = (
     (re.compile(r"investor presentation", re.IGNORECASE), 1),
     (re.compile(r"\bQ[1-4]\s*FY\s*\d{2,4}\s+(?:earnings|results)\s+presentation",
                 re.IGNORECASE), 1),
+)
+
+
+# Enforcement and tax matters. These carry large rupee figures and the word
+# "order", so without them a penalty reads as new business — the one failure
+# mode here that is worse than a missed alert, because it points the wrong way.
+_REGULATORY_ORDER = re.compile(
+    r"action\(?s?\)? taken or orders? passed|"
+    r"orders? passed by|assessment order|adjudicat|"
+    r"penalt|show cause|demand notice|prosecution|search and seizure|"
+    r"\bfine (?:of|imposed)|imposition of",
+    re.IGNORECASE,
 )
 
 
@@ -185,6 +221,15 @@ def should_open_pdf(title: str) -> tuple:
     restated, why = restates_old_results(title)
     if restated:
         return False, "{}, not opened".format(why)
+
+    # ALSO before the positive signals, and for the same structural reason:
+    # _ORDER_TITLE matches the bare word "order", so "Action(s) taken or orders
+    # passed" and "Order passed by SEBI" were being read as order wins and
+    # opened. A regulatory order is not a commercial one, and mistaking the two
+    # inverts the signal instead of merely adding noise.
+    if _REGULATORY_ORDER.search(title):
+        return False, "regulatory action, not an order win ({})".format(
+            title.strip()[:70])
 
     # A positive signal always wins, even if a never-relevant pattern also
     # matches somewhere in the same caption.

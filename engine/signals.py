@@ -288,7 +288,20 @@ _NOT_AN_ORDER_RE = re.compile(
     r"employee stock options?|\besops?\b|"
     r"scheme of (?:arrangement|amalgamation)|merger|demerger|"
     r"capital expenditure|\bcapex\b|"
-    r"acquisition of (?:\d+|a |the )?.{0,40}(?:stake|shares|equity)",
+    r"acquisition of (?:\d+|a |the )?.{0,40}(?:stake|shares|equity)|"
+    # A REGULATORY order is not an order win, and getting this wrong inverts
+    # the signal rather than merely adding noise: an enforcement action reads
+    # as new business. Observed live - ICICIPRULI's "Action(s) taken or orders
+    # passed" was reported as "Order win Rs 364.73 Cr".
+    #
+    # Only unambiguous enforcement language. A bare "gst" or "income tax" is
+    # far too broad: order values are routinely quoted "excluding GST", so that
+    # rejected a genuine Rs 412.50 Cr win (caught by
+    # test_quote_overrides_a_misread_value).
+    r"penalt|adjudicat|show cause|demand notice|"
+    r"orders? passed by|assessment order|"
+    r"(?:gst|income[\s\-]tax|tax)\s+(?:department|authorit|demand|notice|officer)|"
+    r"prosecution|search and seizure",
     re.IGNORECASE,
 )
 

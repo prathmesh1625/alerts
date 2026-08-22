@@ -151,6 +151,18 @@ were filed, so letting one through produces a **duplicate alert days later on
 stale data**. Annual reports and BRSRs restate a year already reported at Q4,
 so they go the same way.
 
+A **regulatory** order is excluded on separate grounds and it matters more.
+`_ORDER_TITLE` matches the bare word "order", so *"Action(s) taken or orders
+passed"* — a penalty or tax demand **against** the company — was being reported
+as `Order win Rs 364.73 Cr` for ICICIPRULI. That does not merely add noise, it
+**points the wrong way**: enforcement action rendered as new business. Caught at
+the title, and again in the body by `is_real_order`.
+
+Regulation 33 is deliberately **not** excluded: it is the regulation quarterly
+results are filed under, so excluding it would suppress the filings this screen
+exists to catch. Regulation 34 (annual report) and 36(1)(b) (the copy sent to
+members) are excluded.
+
 Measured on live data: **24 of 40 alerts were restatements** — earnings-call
 transcripts, investor presentations and Reg. 34(1) annual reports — and 29 of
 400 filings were being sent to the model for nothing.

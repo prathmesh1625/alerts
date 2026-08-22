@@ -242,6 +242,36 @@ def test_other_corporate_actions_are_not_orders():
         assert not is_real_order(OrderWin(scope=scope)), scope
 
 
+def test_a_regulatory_order_is_not_an_order_win():
+    """
+    Observed live: ICICIPRULI's "Action(s) taken or orders passed" — a penalty
+    — was reported as "Order win Rs 364.73 Cr". That does not merely add noise,
+    it points the wrong way: enforcement action rendered as new business.
+    """
+    from signals import is_real_order
+    for scope, quote in [
+        ("penalty imposed", "an order imposing a penalty of Rs. 364.73 crore"),
+        ("tax demand", "a demand notice of Rs. 1.24 crore from the GST department"),
+        ("assessment order", "an assessment order for Rs. 50 crore was received"),
+        ("adjudication", "the adjudicating officer passed an order of Rs. 5 crore"),
+    ]:
+        o = OrderWin(raw_value=100.0, unit="crore", scope=scope, quote=quote)
+        assert not is_real_order(o), scope
+
+
+def test_excluding_gst_does_not_disqualify_a_real_order():
+    """
+    Order values are routinely quoted "excluding GST". A bare tax keyword in
+    the exclusion list rejected a genuine Rs 412.50 Cr win.
+    """
+    from signals import is_real_order
+    o = OrderWin(raw_value=412.50, unit="crore",
+                 scope="supply of equipment",
+                 quote="The value of the order is Rs. 412.50 crore (excluding GST)")
+    assert is_real_order(o)
+    assert close(order_value_cr(o), 412.50)
+
+
 def test_a_genuine_order_still_passes_the_filter():
     from signals import is_real_order
     o = OrderWin(
