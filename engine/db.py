@@ -274,8 +274,35 @@ def save_announcement(row: dict) -> bool:
         return cur.fetchone() is not None
 
 
+# One arbitrary but FIXED key, so every process in this stack contends for the
+# same lock. Any constant works; it only has to be identical across services.
+_SCHEMA_LOCK_KEY = 8_15_2026_01
+
+
 def ensure_schema() -> None:
+    """
+    Create our tables, serialised across services.
+
+    All four services start the moment the database reports healthy and every
+    one of them runs this, so without the lock they execute the same DDL
+    concurrently. `CREATE TABLE IF NOT EXISTS` is NOT safe under concurrency:
+    two backends can both find the table absent and then race to insert into
+    pg_type, and the loser dies with
+
+        duplicate key value violates unique constraint
+        "pg_type_typname_nsp_index"
+
+    The API caught that and degraded, but the workers crashed and were
+    restarted by Docker — which is where the "2x restarts" on a fresh deploy
+    came from. Harmless in the end, since the retry found the tables already
+    made, but it made every deploy look like something had failed.
+
+    A transaction-scoped advisory lock makes the others wait rather than race.
+    It is released automatically when the transaction ends, including on error,
+    so a crash here cannot wedge the next deploy.
+    """
     with get_cursor(dict_rows=False) as cur:
+        cur.execute("SELECT pg_advisory_xact_lock(%s)", (_SCHEMA_LOCK_KEY,))
         cur.execute(SCHEMA_SQL)
 
     # Separate transaction: if `announcements` does not exist yet (a fresh
