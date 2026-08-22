@@ -68,6 +68,14 @@ export default function FormulaPanel({ config, open, onToggle }) {
                         previous year. Bands: Strong ≥ {config.bands.strong},
                         Moderate ≥ {config.bands.moderate}, Watch ≥{" "}
                         {config.alert_min_score}.
+                        {config.min_market_cap_cr > 0 && (
+                            <>
+                                {" "}Companies below ₹
+                                {Number(config.min_market_cap_cr).toLocaleString("en-IN")}{" "}
+                                Cr market cap are skipped — a filing says nothing
+                                about the size of the business behind it.
+                            </>
+                        )}
                     </p>
                 </div>
             )}

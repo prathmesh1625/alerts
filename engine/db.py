@@ -203,6 +203,19 @@ ALTER TABLE volume_alerts
     ADD COLUMN IF NOT EXISTS is_intraday BOOLEAN DEFAULT FALSE;
 ALTER TABLE volume_alerts
     ADD COLUMN IF NOT EXISTS detected_at TIMESTAMPTZ DEFAULT NOW();
+
+-- Company size, in rupees crore, cached per symbol. Fetched lazily for the
+-- handful of symbols about to alert rather than for the whole market, and
+-- refreshed on a TTL. See marketcap.py for why BSE is the source.
+CREATE TABLE IF NOT EXISTS market_caps (
+    symbol         VARCHAR(20) PRIMARY KEY,
+    market_cap_cr  NUMERIC(18,2),
+    scrip_code     VARCHAR(12),
+    fetched_at     TIMESTAMPTZ DEFAULT NOW()
+);
+
+ALTER TABLE stock_alerts   ADD COLUMN IF NOT EXISTS market_cap_cr NUMERIC(18,2);
+ALTER TABLE volume_alerts  ADD COLUMN IF NOT EXISTS market_cap_cr NUMERIC(18,2);
 """
 
 # `announcements.exchange` belongs to the bse-scraper, which creates it in its
@@ -531,7 +544,7 @@ def save_alert(alert: dict) -> None:
             local_path, announced_at, document_type, reporting_period, basis,
             score, conviction, rules_hit, profit_growth_pct,
             revenue_growth_pct, order_value_cr, headline, breakdown, evidence,
-            exchange
+            exchange, market_cap_cr
         )
         VALUES (
             %(announcement_id)s, %(company_symbol)s, %(company_name)s, %(title)s,
@@ -539,7 +552,7 @@ def save_alert(alert: dict) -> None:
             %(reporting_period)s, %(basis)s, %(score)s, %(conviction)s,
             %(rules_hit)s, %(profit_growth_pct)s, %(revenue_growth_pct)s,
             %(order_value_cr)s, %(headline)s, %(breakdown)s, %(evidence)s,
-            %(exchange)s
+            %(exchange)s, %(market_cap_cr)s
         )
         ON CONFLICT (announcement_id) DO UPDATE SET
             score              = EXCLUDED.score,
@@ -831,8 +844,9 @@ def save_volume_alert(v, session_date, is_intraday=False) -> bool:
         INSERT INTO volume_alerts
             (symbol, session_date, volume, baseline_median, baseline_max,
              baseline_sessions, ratio, turnover_cr, close, pct_change,
-             score, conviction, headline, reason, is_intraday, detected_at)
-        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW())
+             score, conviction, headline, reason, is_intraday, market_cap_cr,
+             detected_at)
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW())
         ON CONFLICT (symbol, session_date) DO UPDATE SET
             score = EXCLUDED.score, ratio = EXCLUDED.ratio,
             volume = EXCLUDED.volume, turnover_cr = EXCLUDED.turnover_cr,
@@ -851,6 +865,7 @@ def save_volume_alert(v, session_date, is_intraday=False) -> bool:
             v.get("baseline_sessions"), v.get("ratio"), v.get("turnover_cr"),
             v.get("close"), v.get("pct_change"), v["score"],
             v["conviction"], v.get("headline"), v.get("reason"), is_intraday,
+            v.get("market_cap_cr"),
         ))
         return cur.fetchone() is not None
 
@@ -869,6 +884,30 @@ def fetch_volume_alerts(days: int, min_score: float = 0.0, symbol=None,
     with get_cursor() as cur:
         cur.execute(sql, params)
         return [dict(r) for r in cur.fetchall()]
+
+
+def fetch_market_cap(symbol, ttl_days):
+    """Cached market cap in Rs crore, or None when absent or stale."""
+    with get_cursor() as cur:
+        cur.execute(
+            """SELECT market_cap_cr FROM market_caps
+               WHERE symbol = %s
+                 AND fetched_at > NOW() - (%s * INTERVAL '1 day')""",
+            (symbol.upper(), ttl_days))
+        row = cur.fetchone()
+        return float(row["market_cap_cr"]) if row and row["market_cap_cr"] is not None else None
+
+
+def save_market_cap(symbol, value, scrip_code=None) -> None:
+    with get_cursor(dict_rows=False) as cur:
+        cur.execute(
+            """INSERT INTO market_caps (symbol, market_cap_cr, scrip_code, fetched_at)
+               VALUES (%s, %s, %s, NOW())
+               ON CONFLICT (symbol) DO UPDATE SET
+                   market_cap_cr = EXCLUDED.market_cap_cr,
+                   scrip_code    = EXCLUDED.scrip_code,
+                   fetched_at    = NOW()""",
+            (symbol.upper(), value, scrip_code))
 
 
 def fetch_stats(days: int) -> dict:

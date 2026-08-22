@@ -255,6 +255,24 @@ VOLUME_INTRADAY_INTERVAL_SEC = _int("VOLUME_INTRADAY_INTERVAL_SEC", 300)
 BHAVCOPY_BACKFILL_SESSIONS = _int("BHAVCOPY_BACKFILL_SESSIONS", 25)
 
 
+# ── Size floor (marketcap.py) ────────────────────────────────────────────────
+#
+# Applies to ALL FOUR rules. A filing says nothing about the size of the
+# business behind it: a shell company reporting 100% profit growth on Rs 1 crore
+# of revenue clears rule 1 exactly as a real business does.
+#
+# A company whose market cap CANNOT be determined is allowed through, not
+# blocked - losing a real alert to a data gap is worse than letting one small
+# company past, and the reason is recorded on the filing either way.
+# Set to 0 to disable the floor entirely.
+MIN_MARKET_CAP_CR = _float("MIN_MARKET_CAP_CR", 100.0)
+
+# How long a cached market cap stays usable. It drifts with the share price,
+# which is fine for a floor: it decides "bigger than Rs 100 crore?", not what to
+# display.
+MARKET_CAP_TTL_DAYS = _int("MARKET_CAP_TTL_DAYS", 7)
+
+
 # Conviction bands used for the dashboard's badge colours.
 BAND_STRONG   = _float("BAND_STRONG", 70.0)
 BAND_MODERATE = _float("BAND_MODERATE", 45.0)

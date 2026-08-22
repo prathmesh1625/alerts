@@ -125,6 +125,28 @@ Two guards keep the dedup from over-reaching:
   text layer is nothing but a boilerplate cover letter) so a collision can never
   suppress an unrelated alert weeks later.
 
+## Size floor
+
+A filing says nothing about how big the business behind it is. A shell company
+reporting 100% profit growth on ₹1 crore of revenue clears rule 1 exactly as a
+real business does — live data had `JAIPAN`, a **₹22 Cr** microcap, raising a
+profit-growth alert. So every rule, including rule 4, requires a market cap of
+at least `MIN_MARKET_CAP_CR` (₹100 Cr).
+
+Getting the number took some looking. NSE does not publish one usably: Bhavcopy
+has price but no share count, `market-data-pre-open` carries a `marketCap` field
+that is empty for all 2,170 symbols, and `quote-equity` — which does have it —
+is bot-protected. BSE's `StockTrading` returns `MktCapFull` in ₹ crore, and the
+BSE scrip master is already loaded for the filings feed, so every symbol
+resolves through it.
+
+It is fetched **lazily**, only for symbols about to alert — a handful a day
+rather than the whole 2,600-stock market — and cached in Postgres on a TTL.
+
+**A company whose market cap cannot be determined is allowed through, not
+blocked.** Losing a real alert to a data gap is worse than letting one small
+company past, and the reason is recorded on the filing either way.
+
 ## Cost control
 
 The scraper ingests **every** filing for every subscribed company, and most of

@@ -95,6 +95,15 @@ export default function AlertCard({ alert }) {
                                     {alert.exchange}
                                 </span>
                             )}
+                            {alert.market_cap_cr != null && (
+                                <span title="Market capitalisation">
+                                    ₹
+                                    {Number(alert.market_cap_cr).toLocaleString("en-IN", {
+                                        maximumFractionDigits: 0
+                                    })}{" "}
+                                    Cr
+                                </span>
+                            )}
                             {alert.document_type && (
                                 <span>{alert.document_type.replace("_", " ")}</span>
                             )}

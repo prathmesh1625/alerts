@@ -16,6 +16,13 @@ import tempfile
 
 import agent
 import db as db_module
+import marketcap as marketcap_module
+
+# The size floor hits BSE and the database. Neither belongs in a unit test, and
+# the floor has its own suite (test_marketcap.py), so every company here is
+# simply "big enough". test_the_size_floor_blocks_an_alert overrides it.
+marketcap_module.passes_floor = lambda symbol: (True, 500.0, "market cap Rs 500 Cr")
+agent.marketcap.passes_floor = marketcap_module.passes_floor
 import extractor as extractor_module
 from signals import FilingSignals, MetricYoY, OrderWin, PeriodFigure
 
@@ -25,7 +32,7 @@ REQUIRED_ALERT_KEYS = {
     "local_path", "announced_at", "document_type", "reporting_period", "basis",
     "score", "conviction", "rules_hit", "profit_growth_pct",
     "revenue_growth_pct", "order_value_cr", "headline", "breakdown", "evidence",
-    "exchange",
+    "exchange", "market_cap_cr",
 }
 
 
@@ -500,6 +507,47 @@ def test_routine_title_skips_before_any_download():
 
     assert called["n"] == 0, "downloaded a PDF the title already ruled out"
     assert rec.analyses[-1]["status"] == "SKIPPED"
+
+
+def test_the_size_floor_blocks_an_alert():
+    """
+    A microcap clearing the formula must not alert. Observed live: JAIPAN, at
+    Rs 22 Cr, was raising a PROFIT_GROWTH alert.
+    """
+    orig = agent.marketcap.passes_floor
+    agent.marketcap.passes_floor = lambda symbol: (
+        False, 22.0, "market cap Rs 22 Cr is below the Rs 100 Cr floor")
+    try:
+        rec, msg = run_case(
+            RESULTS_LINES,
+            dict(document_type="RESULTS",
+                 profit=metric(200.0, 100.0)),      # +100%, would normally alert
+            title="Financial Results",
+        )
+    finally:
+        agent.marketcap.passes_floor = orig
+
+    assert rec.alerts == [], "a Rs 22 Cr company raised an alert"
+    last = rec.analyses[-1]
+    assert last["status"] == "ANALYZED"          # it WAS read; it just did not alert
+    assert "below" in last["skip_reason"]
+    assert "22" in msg
+
+
+def test_an_unknown_market_cap_still_alerts():
+    """A data gap must not silently suppress a real alert."""
+    orig = agent.marketcap.passes_floor
+    agent.marketcap.passes_floor = lambda symbol: (True, None, "market cap unknown, allowed through")
+    try:
+        rec, _ = run_case(
+            RESULTS_LINES,
+            dict(document_type="RESULTS", profit=metric(200.0, 100.0)),
+            title="Financial Results",
+        )
+    finally:
+        agent.marketcap.passes_floor = orig
+    assert len(rec.alerts) == 1
+    assert rec.alerts[0]["market_cap_cr"] is None
 
 
 def test_missing_pdf_is_recorded_not_crashed():

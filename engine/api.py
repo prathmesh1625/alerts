@@ -143,6 +143,7 @@ def get_config():
             "cooldown_sessions": config.VOLUME_COOLDOWN_SESSIONS,
             "scored_separately": True,
         },
+        "min_market_cap_cr": config.MIN_MARKET_CAP_CR,
         "alert_min_score": config.ALERT_MIN_SCORE,
         "base_credit": config.BASE_CREDIT,
         "bands": {"strong": config.BAND_STRONG, "moderate": config.BAND_MODERATE},
@@ -163,7 +164,8 @@ def get_alerts(
     rows = _db_call(db.fetch_alerts, window, min_score, symbol, limit)
     for r in rows:
         # NUMERIC comes back as Decimal, which json can't serialise.
-        for k in ("score", "profit_growth_pct", "revenue_growth_pct", "order_value_cr"):
+        for k in ("score", "profit_growth_pct", "revenue_growth_pct",
+                  "order_value_cr", "market_cap_cr"):
             if r.get(k) is not None:
                 r[k] = float(r[k])
     return {"window_days": window, "count": len(rows), "alerts": rows}
@@ -236,7 +238,8 @@ def get_volume_alerts(
     rows = _db_call(db.fetch_volume_alerts, days, min_score, symbol, limit)
     for r in rows:
         r["is_intraday"] = bool(r.get("is_intraday"))
-        for k in ("score", "ratio", "turnover_cr", "close", "pct_change"):
+        for k in ("score", "ratio", "turnover_cr", "close", "pct_change",
+                  "market_cap_cr"):
             if r.get(k) is not None:
                 r[k] = float(r[k])
     return {"window_days": days, "count": len(rows), "alerts": rows}

@@ -121,6 +121,13 @@ services:
       # so a large value is a one-off spike in CPU *and* OpenAI spend.
       - BACKFILL_DAYS=${ALERT_BACKFILL_DAYS:-1}
       - ALERT_MIN_SCORE=${ALERT_MIN_SCORE:-20}
+      # Size floor, applied to ALL FOUR rules. A filing says nothing about how
+      # big the business behind it is - a shell company reporting 100% profit
+      # growth on Rs 1 crore of revenue clears rule 1 exactly as a real one
+      # does. A company whose market cap cannot be determined is allowed
+      # through, not blocked. Set to 0 to disable.
+      - MIN_MARKET_CAP_CR=${ALERT_MIN_MARKET_CAP_CR:-100}
+      - MARKET_CAP_TTL_DAYS=${ALERT_MARKET_CAP_TTL_DAYS:-7}
     volumes:
       - alert_pdf_cache:/app/pdf_cache
     depends_on:
@@ -209,6 +216,8 @@ services:
       # First boot pulls this many days of Bhavcopy to build baselines. The
       # rule stays silent for any stock with fewer than VOLUME_MIN_SESSIONS.
       - BHAVCOPY_BACKFILL_SESSIONS=${ALERT_BHAVCOPY_BACKFILL:-30}
+      - MIN_MARKET_CAP_CR=${ALERT_MIN_MARKET_CAP_CR:-100}
+      - MARKET_CAP_TTL_DAYS=${ALERT_MARKET_CAP_TTL_DAYS:-7}
       # Detect spikes DURING the session too, not only after the close, so a
       # stock that spikes on Monday morning shows up on Monday morning. Costs
       # one cached market snapshot per interval regardless of how many stocks.

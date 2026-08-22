@@ -27,6 +27,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import config
 import db
 import extractor
+import marketcap
 import pdf_fetch
 import scoring
 from pdf_text import document_fingerprint, extract_text_from_pdf_file
@@ -211,6 +212,25 @@ def process_filing(filing: dict) -> str:
             return "{} ---   {} restates published results".format(
                 symbol, signals.document_type.lower())
 
+        # Size floor. A filing says nothing about how big the business behind
+        # it is: a shell company reporting 100% profit growth on Rs 1 crore of
+        # revenue clears rule 1 exactly as a real one does. Checked only for
+        # filings that would otherwise ALERT, so it costs one lookup on a
+        # handful of symbols a day rather than on every filing.
+        if result["qualifies"]:
+            big_enough, cap_cr, why = marketcap.passes_floor(symbol)
+            if not big_enough:
+                db.record_analysis(
+                    ann_id, symbol, file_key, "ANALYZED",
+                    document_type=signals.document_type,
+                    score=result["score"],
+                    raw_signals=extractor.signals_to_json(signals),
+                    fingerprint=fingerprint or None,
+                    skip_reason=why,
+                )
+                return "{} ---   {} (score {:.1f})".format(symbol, why, result["score"])
+            result["market_cap_cr"] = cap_cr
+
         if not result["qualifies"]:
             return "{} ---   score {:.1f} (below {:.0f})".format(
                 symbol, result["score"], config.ALERT_MIN_SCORE
@@ -237,6 +257,7 @@ def process_filing(filing: dict) -> str:
             "breakdown": result["breakdown"],
             "evidence": signals.evidence,
             "exchange": filing.get("exchange") or "NSE",
+            "market_cap_cr": result.get("market_cap_cr"),
         })
         return "{} ALERT {:.1f} {} - {}".format(
             symbol, result["score"], result["conviction"], result["headline"]

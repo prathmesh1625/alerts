@@ -27,6 +27,7 @@ import bhavcopy
 import config
 import db
 import market
+import marketcap
 import volume
 
 
@@ -77,6 +78,11 @@ def detect_for_session(session_date) -> dict:
         )
 
         if verdict["hit"]:
+            big_enough, cap_cr, why = marketcap.passes_floor(row["symbol"])
+            if not big_enough:
+                reasons[why.split("(")[0][:40]] = reasons.get(why.split("(")[0][:40], 0) + 1
+                continue
+            verdict["market_cap_cr"] = cap_cr
             verdict["conviction"] = volume.conviction_band(verdict["score"])
             db.save_volume_alert(verdict, session_date)
             fired += 1
@@ -131,6 +137,10 @@ def intraday_pass() -> dict:
             sessions_since_last_alert=since,
         )
         if verdict["hit"]:
+            big_enough, cap_cr, _ = marketcap.passes_floor(s["symbol"])
+            if not big_enough:
+                continue
+            verdict["market_cap_cr"] = cap_cr
             verdict["conviction"] = volume.conviction_band(verdict["score"])
             db.save_volume_alert(verdict, today, is_intraday=True)
             fired += 1

@@ -1,0 +1,117 @@
+"""
+marketcap.py — how big is this company, in rupees crore.
+
+Used as a floor: rules 1-3 score a FILING, and a filing says nothing about the
+size of the business behind it. A shell company reporting 100% profit growth on
+Rs 1 crore of revenue clears rule 1 exactly as a real business does. The market
+cap is what separates them.
+
+WHERE THE NUMBER COMES FROM
+
+NSE does not publish one usably. Its Bhavcopy has price but no share count;
+`/api/market-data-pre-open` carries a `marketCap` field that is empty ("-") for
+all 2,170 symbols; `/api/quote-equity`, which does have it, is bot-protected
+(403). BSE's `StockTrading` endpoint returns `MktCapFull` in rupees crore, and
+we already carry BSE's scrip master for the filings feed, so every symbol we
+alert on can be resolved through it. All ten symbols from a live alert batch
+resolved, including a Rs 22 crore microcap.
+
+FETCHED LAZILY. Only symbols that are about to raise an alert are looked up -
+a handful a day - rather than the whole 2,600-stock market. Results are cached
+in Postgres and refreshed on a TTL.
+
+The cached figure drifts with the share price between refreshes. That is
+acceptable for a floor: it decides "bigger than Rs 100 crore?", not what to
+display, and a company sitting exactly on the boundary is not one whose
+classification a few days of price movement should be trusted to settle anyway.
+"""
+import requests
+
+import config
+import db
+import feeds
+
+URL = "https://api.bseindia.com/BseIndiaAPI/api/StockTrading/w"
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+    "Accept": "application/json, text/plain, */*",
+    "Referer": "https://www.bseindia.com/",
+}
+
+_SYMBOL_TO_SCRIP = None
+
+
+def _log(msg):
+    print("[mcap] {}".format(msg), flush=True)
+
+
+def symbol_to_scrip(symbol):
+    """Ticker -> BSE scrip code, by inverting the map the BSE feed already uses."""
+    global _SYMBOL_TO_SCRIP
+    if _SYMBOL_TO_SCRIP is None:
+        _SYMBOL_TO_SCRIP = {v: k for k, v in feeds.scrip_map().items()}
+    return _SYMBOL_TO_SCRIP.get((symbol or "").upper())
+
+
+def _fetch(symbol):
+    """Live market cap in Rs crore, or None."""
+    scrip = symbol_to_scrip(symbol)
+    if not scrip:
+        return None, None
+    try:
+        r = requests.get(URL, params={"flag": "", "quotetype": "EQ",
+                                      "scripcode": scrip, "seriesid": ""},
+                         headers=HEADERS, timeout=20)
+        if r.status_code != 200:
+            return None, scrip
+        raw = (r.json() or {}).get("MktCapFull")
+    except Exception as e:
+        _log("{}: {}".format(symbol, e))
+        return None, scrip
+
+    if raw in (None, "", "-"):
+        return None, scrip
+    try:
+        # Indian grouping: "17,78,175.59" -> 1778175.59, already in crore.
+        return float(str(raw).replace(",", "").strip()), scrip
+    except ValueError:
+        return None, scrip
+
+
+def get(symbol):
+    """
+    Market cap in Rs crore for one symbol, from cache or freshly fetched.
+
+    Returns None when it genuinely cannot be determined — an NSE-only listing
+    with no BSE scrip, or BSE unreachable. Callers must treat None as UNKNOWN
+    and let the alert through: losing a real alert to a data gap is worse than
+    letting a small company past the floor, and the reason is recorded either
+    way.
+    """
+    cached = db.fetch_market_cap(symbol, config.MARKET_CAP_TTL_DAYS)
+    if cached is not None:
+        return cached
+
+    value, scrip = _fetch(symbol)
+    if value is not None:
+        db.save_market_cap(symbol, value, scrip)
+    return value
+
+
+def passes_floor(symbol):
+    """
+    (allowed, market_cap_cr, reason).
+
+    `allowed` is False only when we KNOW the company is below the floor.
+    """
+    floor = config.MIN_MARKET_CAP_CR
+    if floor <= 0:
+        return True, None, "market-cap floor disabled"
+
+    cap = get(symbol)
+    if cap is None:
+        return True, None, "market cap unknown, allowed through"
+    if cap < floor:
+        return False, cap, "market cap Rs {:,.0f} Cr is below the Rs {:,.0f} Cr floor".format(
+            cap, floor)
+    return True, cap, "market cap Rs {:,.0f} Cr".format(cap)
