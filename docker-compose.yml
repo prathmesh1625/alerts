@@ -64,7 +64,11 @@ services:
       - DB_USER=${ALERT_DB_USER:-alerts}
       - DB_PASSWORD=${ALERT_DB_PASSWORD:?ALERT_DB_PASSWORD must be set}
       # Gentle on purpose - see the note at the top of this file.
-      - SCRAPE_INTERVAL_SEC=${ALERT_SCRAPE_INTERVAL_SEC:-180}
+      # Biggest single component of end-to-end latency. 20s matches the
+      # cadence the production NSE scraper already runs at, so it is a rate
+      # NSE demonstrably tolerates - but it does roughly double the feed
+      # traffic from this server. Raise this first if NSE throttles.
+      - SCRAPE_INTERVAL_SEC=${ALERT_SCRAPE_INTERVAL_SEC:-20}
       - NSE_FEED_PAGES=${ALERT_NSE_FEED_PAGES:-2}
       - BSE_FEED_PAGES=${ALERT_BSE_FEED_PAGES:-2}
       # Unused by this process, but config.py reads it at import.
@@ -109,7 +113,10 @@ services:
       - SKIP_BY_TITLE=${ALERT_SKIP_BY_TITLE:-true}
       - WORKER_THREADS=${ALERT_WORKER_THREADS:-2}
       - BATCH_SIZE=${ALERT_BATCH_SIZE:-10}
-      - POLL_INTERVAL_SEC=${ALERT_POLL_INTERVAL_SEC:-60}
+      - POLL_INTERVAL_SEC=${ALERT_POLL_INTERVAL_SEC:-5}
+      # Retries count in CYCLES, and BSE lists filings up to two minutes
+      # before the PDF is fetchable. 20 x 5s restores that window.
+      - MAX_ANALYSIS_RETRIES=${ALERT_MAX_ANALYSIS_RETRIES:-20}
       # OCR is the heaviest path there is. OCR_ENABLED=false removes the spike
       # entirely, at the cost of giving up scanned filings.
       - OCR_ENABLED=${ALERT_OCR_ENABLED:-true}

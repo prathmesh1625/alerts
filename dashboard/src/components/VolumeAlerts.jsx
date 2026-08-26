@@ -29,7 +29,7 @@ export default function VolumeAlerts({ days = 5 }) {
         load();
         // Spikes are detected during the session, so this list changes while
         // the market is open. Matches the worker's intraday interval.
-        const id = setInterval(load, 60_000);
+        const id = setInterval(load, 20_000);
         return () => {
             alive = false;
             clearInterval(id);

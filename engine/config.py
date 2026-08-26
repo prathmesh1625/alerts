@@ -81,11 +81,17 @@ STANDALONE = _bool("STANDALONE", False)
 NSE_FEED_PAGES = _int("NSE_FEED_PAGES", 2)
 BSE_FEED_PAGES = _int("BSE_FEED_PAGES", 2)
 
-# Seconds between feed polls. Deliberately far slower than the production
-# scraper's 20s: that one races to deliver WhatsApp pushes, where speed is the
-# product. A dashboard alert is not latency-critical, and polling gently keeps
-# a second scraper on the same server IP well clear of NSE's rate limiting.
-SCRAPE_INTERVAL_SEC = _int("SCRAPE_INTERVAL_SEC", 180)
+# Seconds between feed polls.
+#
+# This is the single biggest component of end-to-end latency: at 180s a filing
+# waited an average of 90 seconds just to be NOTICED. 20s matches the cadence
+# the production NSE scraper has been running at without trouble, so it is a
+# rate NSE demonstrably tolerates from this IP.
+#
+# It does roughly DOUBLE the feed traffic coming from this server, since that
+# scraper is already polling at 20s. If NSE ever starts throttling, this is the
+# first number to raise.
+SCRAPE_INTERVAL_SEC = _int("SCRAPE_INTERVAL_SEC", 20)
 
 # Where on-demand PDF downloads are cached. A working set, not an archive:
 # pruned by age, because a filing's verdict lives in the database once analysed.
@@ -298,10 +304,18 @@ BAND_MODERATE = _float("BAND_MODERATE", 45.0)
 # ─────────────────────────────────────────────────────────────────────────────
 #  Worker
 # ─────────────────────────────────────────────────────────────────────────────
-POLL_INTERVAL_SEC = _int("POLL_INTERVAL_SEC", 60)
+# How often the agent looks for filings the scraper has inserted. This is a
+# single indexed query against a local database, so polling hard costs
+# essentially nothing and removes another ~30s of average delay.
+POLL_INTERVAL_SEC = _int("POLL_INTERVAL_SEC", 5)
 BATCH_SIZE        = _int("BATCH_SIZE", 25)
 WORKER_THREADS    = _int("WORKER_THREADS", 4)
-MAX_ANALYSIS_RETRIES = _int("MAX_ANALYSIS_RETRIES", 3)
+# Retries are counted in CYCLES, so shortening the poll interval also shortened
+# the retry WINDOW - and BSE routinely lists a filing up to two minutes before
+# its PDF reaches the CDN. At 60s x 3 that window was 3 minutes; at 5s x 3 it
+# would have been 15 seconds, and those filings would have been thrown away.
+# 20 x 5s restores roughly the two minutes bse-scraper itself allows for.
+MAX_ANALYSIS_RETRIES = _int("MAX_ANALYSIS_RETRIES", 20)
 
 # Only look at filings from the last N days on a cold start, so the first run
 # doesn't try to analyse the entire back-catalogue at once.

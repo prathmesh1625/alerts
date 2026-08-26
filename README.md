@@ -125,6 +125,36 @@ Two guards keep the dedup from over-reaching:
   text layer is nothing but a boilerplate cover letter) so a collision can never
   suppress an unrelated alert weeks later.
 
+## Latency
+
+Measured, filing published → visible on the dashboard:
+
+| Stage | Interval | Average wait |
+|---|---|---|
+| Scraper notices it | 20s | 10s |
+| Agent picks it up | 5s | 2.5s |
+| Download + read + model | — | ~11s |
+| Dashboard refresh | 15s | 7.5s |
+| **Total** | | **~31s** (worst ~55s) |
+
+Previously ~162s average. Almost all of the old figure was **polling delay**,
+not work: the download is 0.5s and the text extraction 0.3s on a typical filing.
+
+**~10s end to end is not reachable**, and it is worth knowing why. The OpenAI
+call alone is 3–10s, and the filing has to reach NSE's feed before anything here
+can see it — the existence of a separate `bse-scraper` in the production stack
+is itself evidence that publication timing between the two exchanges varies by
+minutes. Around 15–20s is the practical floor.
+
+If you want the *filing* visible faster than the *verdict*, `/filings` already
+shows it as `PENDING` the moment the scraper inserts it — roughly 10s — with
+the alert decision following once the model has read it.
+
+The one tradeoff worth watching: a 20s scrape interval roughly **doubles the
+feed traffic** from this server, since the production scraper is already polling
+at 20s. That cadence is one NSE demonstrably tolerates from this IP, but
+`ALERT_SCRAPE_INTERVAL_SEC` is the first number to raise if throttling appears.
+
 ## Size floor
 
 A filing says nothing about how big the business behind it is. A shell company

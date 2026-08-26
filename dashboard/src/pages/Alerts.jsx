@@ -7,7 +7,9 @@ import StatsBar from "../components/StatsBar.jsx";
 import VolumeAlerts from "../components/VolumeAlerts.jsx";
 import { fetchAlerts, fetchConfig, fetchStats } from "../lib/api.js";
 
-const REFRESH_MS = 60_000;
+// The pipeline now surfaces a filing in well under a minute, so a 60s
+// refresh had become the slowest link in the chain.
+const REFRESH_MS = 15_000;
 
 function EmptyState({ days, minScore, query }) {
     const reason = query
