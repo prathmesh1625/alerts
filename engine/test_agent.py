@@ -550,6 +550,58 @@ def test_an_unknown_market_cap_still_alerts():
     assert rec.alerts[0]["market_cap_cr"] is None
 
 
+def test_a_null_orders_list_does_not_lose_the_filing():
+    """
+    The model returns `orders: null` rather than `[]` for a filing with no
+    orders. A MISSING key would fall back to the default; an explicit null was
+    a type error that killed the filing outright, after the model call had
+    already been paid for:
+
+        ValidationError: orders
+          Input should be a valid list [input_value=None]
+
+    Seen in production on 3MINDIA and VALPLAST.
+    """
+    from signals import FilingSignals, OrderWin, PeriodFigure
+    s = FilingSignals(company_name=None, document_type="RESULTS",
+                      orders=None, evidence=None, notes=None,
+                      basis=None, statement_unit=None, reporting_period=None)
+    assert s.orders == []
+    assert s.evidence == []
+    assert s.company_name == ""
+
+    # The nested models are just as exposed.
+    assert OrderWin(raw_value=1.0, unit=None, customer=None,
+                    scope=None, quote=None).unit == ""
+    assert PeriodFigure(raw_value=1.0, period_label=None,
+                        unit=None, raw=None).unit == ""
+
+
+def test_a_big_pdf_skips_the_memory_hungry_paths():
+    """
+    pdfplumber and OCR have no memory ceiling of their own. In a 768 MB
+    container either can be OOM-killed on a large document, which Python cannot
+    catch — the process disappears mid-cycle and Docker restarts it. A big file
+    must still yield its text layer, just without those fallbacks.
+    """
+    import config, pdf_text
+    tmpdir = tempfile.mkdtemp()
+    small = write_pdf(os.path.join(tmpdir, "s.pdf"), RESULTS_LINES)
+    big = os.path.join(tmpdir, "b.pdf")
+    with open(small, "rb") as fh:
+        raw = fh.read()
+    with open(big, "wb") as fh:
+        # Padded past the ceiling with a trailing PDF comment, so the file is
+        # still a valid PDF — just a big one.
+        padding = b"X" * (config.PDF_HEAVY_PARSE_MAX_BYTES + 1)
+        fh.write(raw + b"\n%" + padding)
+
+    report = {}
+    text = pdf_text.extract_text_from_pdf_file(big, report=report)
+    assert len(text) > 100, "a big file lost its text layer entirely"
+    assert report.get("ocr_pages") == [], "OCR ran on an oversized document"
+
+
 def test_missing_pdf_is_recorded_not_crashed():
     rec = Recorder()
     agent.db.record_analysis = rec.record_analysis

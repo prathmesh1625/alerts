@@ -137,7 +137,10 @@ services:
       resources:
         limits:
           cpus: "${ALERT_CPU_LIMIT:-0.75}"
-          memory: ${ALERT_MEM_LIMIT:-768M}
+          # Raised from 768M. pdfplumber and OCR are the memory-hungry
+          # paths and an OOM kill cannot be caught in Python - the
+          # process vanishes mid-cycle and Docker restarts it.
+          memory: ${ALERT_MEM_LIMIT:-1536M}
 
   # --- read-only API ---------------------------------------------------------
   alert-api:

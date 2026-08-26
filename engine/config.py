@@ -95,6 +95,23 @@ PDF_DOWNLOAD_TIMEOUT_SEC = _int("PDF_DOWNLOAD_TIMEOUT_SEC", 60)
 # Refuse absurdly large attachments rather than filling the disk with one file.
 PDF_MAX_BYTES = _int("PDF_MAX_BYTES", 60 * 1024 * 1024)
 
+# Above this size a document is read with pypdf ONLY - no pdfplumber, no OCR.
+#
+# Those two are the memory-hungry paths and they have no ceiling of their own.
+# pdfminer (under pdfplumber) builds a full object graph for the whole file and
+# can reach gigabytes on a large one; OCR rasterises pages and runs tesseract,
+# once per worker thread. In a 768 MB container either can be OOM-killed by the
+# kernel, which Python cannot catch - the process simply disappears mid-cycle
+# and Docker restarts it.
+#
+# pypdf streams and stays cheap, so a big document still yields whatever text
+# layer it has; it just does not get the expensive fallbacks.
+PDF_HEAVY_PARSE_MAX_BYTES = _int("PDF_HEAVY_PARSE_MAX_BYTES", 12 * 1024 * 1024)
+
+# Hard ceiling on pages handed to pdfplumber, for a document that is small on
+# disk but enormous once expanded.
+PDFPLUMBER_MAX_PAGES = _int("PDFPLUMBER_MAX_PAGES", 60)
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  OpenAI

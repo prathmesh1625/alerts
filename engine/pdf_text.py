@@ -68,10 +68,23 @@ def _extract_pages_pypdf(pdf_path: str):
 
 
 def _extract_pages_pdfplumber(pdf_path: str):
-    """Per-page text via pdfplumber, skipping the slow extract_tables() geometry."""
+    """
+    Per-page text via pdfplumber, skipping the slow extract_tables() geometry.
+
+    Page-capped: pdfminer holds the whole document in memory, so a file that is
+    modest on disk but hundreds of pages once expanded is exactly the shape that
+    gets a container OOM-killed.
+    """
     import pdfplumber
+    out = []
     with pdfplumber.open(pdf_path) as pdf:
-        return [(page.extract_text() or "") for page in pdf.pages]
+        for i, page in enumerate(pdf.pages):
+            if i >= config.PDFPLUMBER_MAX_PAGES:
+                _log("[pdf] stopping pdfplumber at {} pages".format(
+                    config.PDFPLUMBER_MAX_PAGES))
+                break
+            out.append(page.extract_text() or "")
+    return out
 
 
 def text_looks_garbled(text: str) -> bool:
@@ -199,10 +212,24 @@ def extract_text_from_pdf_file(pdf_path: str, report=None) -> str:
     Pass `report` (a dict) to receive extraction diagnostics without parsing
     stderr — the /debug endpoint and run_once.py use this.
     """
+    # A big document skips BOTH expensive fallbacks. They have no memory
+    # ceiling of their own, and being OOM-killed is not an error we can catch —
+    # the process just disappears and the container restarts.
+    try:
+        size = os.path.getsize(pdf_path)
+    except OSError:
+        size = 0
+    heavy = size > config.PDF_HEAVY_PARSE_MAX_BYTES
+    if heavy:
+        _log("[pdf] {} is {:.1f} MB - pypdf only, no pdfplumber or OCR".format(
+            os.path.basename(pdf_path), size / 1e6))
+
     pages = _extract_pages_pypdf(pdf_path)
     if pages is None:
+        if heavy:
+            return ""
         pages = _extract_pages_pdfplumber(pdf_path)
-    elif len("".join(pages).strip()) <= 100:
+    elif not heavy and len("".join(pages).strip()) <= 100:
         # pypdf found next to nothing — pdfplumber sometimes does better on the
         # same file, so try it before paying for OCR.
         try:
@@ -227,7 +254,7 @@ def extract_text_from_pdf_file(pdf_path: str, report=None) -> str:
             "ocr_chars": 0,
         })
 
-    needs_ocr = bad_indexes and OCR_ENABLED and (
+    needs_ocr = bad_indexes and OCR_ENABLED and not heavy and (
         garbled_seen
         or len(usable_text.strip()) < _MIN_USABLE_CHARS
         or not looks_like_financial_results(usable_text)

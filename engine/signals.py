@@ -19,7 +19,7 @@ Models read tables well and do sums badly. So they no longer do the sums.
 import re
 from typing import List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from units import (
     detect_statement_unit,
@@ -57,6 +57,11 @@ class PeriodFigure(BaseModel):
         default="",
         description="The figure as printed, including its unit, e.g. '45,231.00 (Rs. in Lakhs)'",
     )
+
+    @field_validator("period_label", "unit", "raw", mode="before")
+    @classmethod
+    def _none_is_blank(cls, v):
+        return "" if v is None else v
 
 
 class MetricYoY(BaseModel):
@@ -104,6 +109,11 @@ class OrderWin(BaseModel):
         default="",
         description="The sentence from the filing that states this order and its value",
     )
+
+    @field_validator("unit", "customer", "scope", "quote", mode="before")
+    @classmethod
+    def _none_is_blank(cls, v):
+        return "" if v is None else v
 
 
 class FilingSignals(BaseModel):
@@ -186,6 +196,28 @@ class FilingSignals(BaseModel):
         default="",
         description="One line on anything ambiguous, e.g. a restated comparative",
     )
+
+    # The model returns `null` for a list it considers inapplicable — "orders":
+    # null on a results filing with no orders — rather than the empty list the
+    # schema asks for. A MISSING key would fall back to default_factory, but an
+    # explicit null is a type error, and it killed the filing outright:
+    #
+    #     ValidationError: orders
+    #       Input should be a valid list [input_value=None]
+    #
+    # Null and absent mean the same thing here, so treat them the same rather
+    # than losing a filing (and the model call already paid for) to it.
+    @field_validator("orders", "evidence", mode="before")
+    @classmethod
+    def _none_is_empty(cls, v):
+        return [] if v is None else v
+
+    # Same story for the string fields, which come back null just as readily.
+    @field_validator("company_name", "document_type", "reporting_period",
+                     "basis", "statement_unit", "notes", mode="before")
+    @classmethod
+    def _none_is_blank(cls, v):
+        return "" if v is None else v
 
 
 # -----------------------------------------------------------------------------
