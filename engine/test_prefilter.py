@@ -271,6 +271,50 @@ def test_an_order_win_is_never_mistaken_for_a_deck():
     assert ok
 
 
+# -----------------------------------------------------------------------------
+#  A terminated order is not an order win — the free layer
+#
+#  "Termination of work order" matches _ORDER_TITLE on the bare word "order",
+#  so RPPINFRA's cancelled Rs 205.89 Cr contract was opened, read and scored
+#  27.94 STRONG. Catching it here costs nothing and saves the model call.
+# -----------------------------------------------------------------------------
+
+def test_a_terminated_order_title_is_not_opened():
+    for title in (
+        "Termination of work order - intimation pursuant to Regulation 30 of "
+        "the SEBI (LODR) Regulations 2015",
+        "Termination of Work Order",
+        "Cancellation of purchase order",
+        "Intimation regarding termination of contract",
+        "Withdrawal of Letter of Award",
+        "Work order terminated by the customer",
+        "Foreclosure of the project awarded earlier",
+    ):
+        ok, why = should_open_pdf(title)
+        assert not ok, "should not have opened: {}".format(title)
+        assert "terminated or cancelled" in why, why
+
+
+def test_termination_screening_does_not_swallow_genuine_wins():
+    """
+    The risk of the check above. These must all still be opened — an order won
+    is the only thing the live formula looks for, so a false positive here is
+    the whole rule going quiet.
+    """
+    for title in (
+        "Receipt of Order",
+        "Intimation of Letter of Award",
+        "Receipt of work order from NTPC Limited",
+        "Bagging of a new contract",
+        "Award of contract worth Rs. 412 crore",
+        "Declared L1 for a project",
+        # Wins that merely CONTAIN a termination word in another role.
+        "Receipt of work order - no compensation for cancellation clause",
+    ):
+        ok, why = should_open_pdf(title)
+        assert ok, "should have opened: {} ({})".format(title, why)
+
+
 if __name__ == "__main__":
     passed = failed = 0
     for name, fn in sorted(globals().items()):

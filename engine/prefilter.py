@@ -168,6 +168,26 @@ _REGULATORY_ORDER = re.compile(
 )
 
 
+# An order ENDING. Same shape of failure as the regulatory order above and
+# worse in degree: "Termination of work order" matches _ORDER_TITLE on the bare
+# word "order", so RPPINFRA's cancelled Rs 205.89 Cr contract was opened, read,
+# and scored 27.94 STRONG as an order win. The company was losing that work.
+#
+# The termination word has to attach to an ORDER noun. A bare "termination"
+# also covers auditors resigning and employment ending, which are not this
+# rule's business and are screened elsewhere.
+_TERMINATED_ORDER_TITLE = re.compile(
+    r"(?:terminat\w*|cancell?\w*|withdraw\w*|foreclos\w*|revocation|rescission)"
+    r"[\s\-,:]+(?:of[\s\-,:]+)?(?:the[\s\-,:]+)?"
+    r"(?:work[\s\-]?|purchase[\s\-]?|supply[\s\-]?)?"
+    r"(?:order|contract|loa\b|letter of award|letter of intent|project)|"
+    r"(?:work[\s\-]?order|contract|loa\b|letter of award|project)"
+    r"[\s\-,:]+(?:is |was |has been |stands? )?"
+    r"(?:terminat|cancell?|withdraw|foreclos|revok|rescind)\w*",
+    re.IGNORECASE,
+)
+
+
 def _markers_clear(text: str, markers) -> int:
     return sum(1 for rx, threshold in markers if len(rx.findall(text)) >= threshold)
 
@@ -240,6 +260,12 @@ def should_open_pdf(title: str) -> tuple:
     # inverts the signal instead of merely adding noise.
     if _REGULATORY_ORDER.search(title):
         return False, "regulatory action, not an order win ({})".format(
+            title.strip()[:70])
+
+    # And before them for a third time: an order being TERMINATED is announced
+    # in the same words as one being won, and is the same size.
+    if _TERMINATED_ORDER_TITLE.search(title):
+        return False, "order terminated or cancelled, not won ({})".format(
             title.strip()[:70])
 
     # A positive signal always wins, even if a never-relevant pattern also

@@ -26,6 +26,7 @@ import math
 import config
 from signals import (
     FilingSignals,
+    document_reports_order_loss,
     figure_cr,
     resolve_statement_unit,
     real_orders,
@@ -139,8 +140,8 @@ def _rule_revenue(signals: FilingSignals, unit=None) -> dict:
     return rule
 
 
-def _rule_orders(signals: FilingSignals) -> dict:
-    total = total_order_value_cr(signals)
+def _rule_orders(signals: FilingSignals, pdf_text: str = "") -> dict:
+    total = total_order_value_cr(signals, pdf_text)
     rule = {
         "rule": "ORDER_WIN",
         "label": "Order win >= {}".format(_fmt_cr(config.ORDER_MIN_CR)),
@@ -155,8 +156,9 @@ def _rule_orders(signals: FilingSignals) -> dict:
 
     # Only genuine order wins count. A buyback / QIP / dividend carries a big
     # rupee figure and gpt-4o-mini has been observed labelling one ORDER_WIN on
-    # a real filing, which would otherwise max this rule out.
-    orders = real_orders(signals)
+    # a real filing, which would otherwise max this rule out. A TERMINATED order
+    # carries one too, and is the same size as the win it cancels.
+    orders = real_orders(signals, pdf_text)
 
     if total is not None and total >= config.ORDER_MIN_CR:
         strength = _log_strength(total, config.ORDER_MIN_CR, config.ORDER_FULL_CR)
@@ -171,8 +173,15 @@ def _rule_orders(signals: FilingSignals) -> dict:
         # figure and get mistaken for business won.
         blob = " ".join("{} {}".format(o.scope or "", o.quote or "")
                         for o in signals.orders).lower()
-        if any(k in blob for k in ("loan", "facilit", "deposit", "borrow",
-                                   "debenture", "rating", "credit")):
+        lost = [o for o in signals.orders if o.status == "TERMINATED"]
+        if lost or document_reports_order_loss(pdf_text):
+            # Worth stating plainly: this is not a near miss, it is the
+            # opposite of the news the rule is looking for.
+            why = "an order LOST - terminated or cancelled, not won"
+        elif any(o.status in ("AMENDED", "COMPLETED") for o in signals.orders):
+            why = "an existing order amended or closed out, not newly won"
+        elif any(k in blob for k in ("loan", "facilit", "deposit", "borrow",
+                                     "debenture", "rating", "credit")):
             why = "money raised or borrowed, not an order won"
         elif any(k in blob for k in ("penalt", "adjudicat", "show cause",
                                      "demand notice", "assessment order")):
@@ -244,7 +253,7 @@ def score_filing(signals: FilingSignals, pdf_text: str = "") -> dict:
     if config.REVENUE_RULE_ENABLED:
         rules.append(_rule_revenue(signals, unit))
     if config.ORDER_RULE_ENABLED:
-        rules.append(_rule_orders(signals))
+        rules.append(_rule_orders(signals, pdf_text))
 
     score = round(sum(r["points"] for r in rules), 2)
     hits = [r["rule"] for r in rules if r["hit"]]
@@ -257,7 +266,7 @@ def score_filing(signals: FilingSignals, pdf_text: str = "") -> dict:
         "headline": build_headline(signals, rules),
         "profit_growth_pct": yoy_growth(signals.profit, unit),
         "revenue_growth_pct": yoy_growth(signals.revenue, unit),
-        "order_value_cr": total_order_value_cr(signals),
+        "order_value_cr": total_order_value_cr(signals, pdf_text),
         "breakdown": {
             "rules": rules,
             # Follows the ENABLED set, so the score is always readable against

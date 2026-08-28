@@ -241,6 +241,205 @@ def test_only_the_enabled_rules_are_scored():
          config.ORDER_RULE_ENABLED) = saved
 
 
+# -----------------------------------------------------------------------------
+#  A terminated order is not a win
+#
+#  RPPINFRA announced the termination of a Rs 205.89 Cr SDAT work order and it
+#  scored 27.94 STRONG as "Order win Rs 205.89 Cr". The order was real and the
+#  extracted quote was accurate — "the value of the work order is Rs.
+#  205,89,14,000/-" — so nothing about the ORDER was wrong. The company was
+#  losing it. That makes this the inverted signal again, and worse than noise.
+# -----------------------------------------------------------------------------
+
+# Verbatim from the RPPINFRA filing.
+TERMINATION_TEXT = """
+Subject: Termination of work order - intimation pursuant to Regulation 30
+The Company has received a communication from SDAT regarding termination of the
+aforesaid work order, pursuant to the decision to restructure and redesign the
+Global Sports City project. The value of the work order is Rs. 205,89,14,000/-.
+"""
+
+# The two traps. Both appear in real terminations AND in genuine wins, so
+# neither may be treated as evidence of anything.
+SEBI_ANNEXURE_ROW = (
+    "4 Details of amendment or reasons for terminations and impact thereof "
+    "(to the extent possible); Not applicable"
+)
+QUOTED_CLAUSE_NAMES = (
+    'in exercise of the powers conferred under clause 55 "No Compensation for '
+    'Cancellation / Reduction of Works", Clause 68.4- "Cancellation/'
+    'Determination of Contract in Full or Part", Clause 71.0 "Force Majeure"'
+)
+
+GENUINE_WIN_TEXT = """
+Subject: Receipt of work order
+We wish to inform you that the Company has received a work order from NTPC
+Limited for the design, engineering, procurement and construction of a
+sub-station. The value of the work order is Rs. 205,89,14,000/-.
+"""
+
+
+def terminated_order(**kw):
+    kw.setdefault("unit", "crore")
+    kw.setdefault("raw_value", 205.89)
+    kw.setdefault("customer", "Sports Development Authority of Tamil Nadu")
+    kw.setdefault("scope", "Establishment of Global Sports City, Chennai - "
+                           "design, Engineering, procurement and construction")
+    kw.setdefault("quote", "the value of the work order is Rs. 205,89,14,000/-")
+    return OrderWin(**kw)
+
+
+def test_a_terminated_order_does_not_fire():
+    s = results(document_type="OTHER",
+                orders=[terminated_order(status="TERMINATED")])
+    r = scoring.score_filing(s)
+    assert r["rules_hit"] == [], r["rules_hit"]
+    assert r["score"] == 0.0
+    assert r["qualifies"] is False
+
+
+def test_a_terminated_order_reports_no_value():
+    """
+    The dashboard column must not carry the value either. Showing
+    "Rs 205.89 Cr" against a cancelled contract reads as a win at a glance,
+    whatever the score says.
+    """
+    s = results(document_type="OTHER",
+                orders=[terminated_order(status="TERMINATED")])
+    assert scoring.score_filing(s)["order_value_cr"] is None
+
+
+def test_a_termination_says_so_rather_than_shrugging():
+    s = results(document_type="OTHER",
+                orders=[terminated_order(status="TERMINATED")])
+    note = scoring.score_filing(s)["breakdown"]["rules"][-1]["note"]
+    assert "LOST" in note, note
+
+
+def test_amended_and_completed_orders_do_not_fire():
+    """Neither is new business won today."""
+    for st in ("AMENDED", "COMPLETED"):
+        r = scoring.score_filing(results(document_type="OTHER",
+                                         orders=[terminated_order(status=st)]))
+        assert r["rules_hit"] == [], (st, r["rules_hit"])
+
+
+def test_the_document_catches_a_termination_the_model_missed():
+    """
+    The backstop. The model labels it NEW — every field it looked at points
+    that way — and the document text alone has to stop it.
+    """
+    s = results(document_type="ORDER_WIN",
+                orders=[terminated_order(status="NEW")])
+    assert "ORDER_WIN" in scoring.score_filing(s)["rules_hit"], \
+        "fixture must fire without the document text, or this proves nothing"
+
+    r = scoring.score_filing(s, TERMINATION_TEXT)
+    assert r["rules_hit"] == [], r["rules_hit"]
+    assert r["order_value_cr"] is None
+
+
+def test_missing_status_behaves_as_it_did_before_the_field_existed():
+    """An omitted or junk status must not silently suppress a real win."""
+    assert OrderWin(unit="crore", raw_value=5.0).status == "NEW"
+    assert OrderWin(unit="crore", raw_value=5.0, status=None).status == "NEW"
+    assert OrderWin(unit="crore", raw_value=5.0, status="banana").status == "NEW"
+    assert OrderWin(unit="crore", raw_value=5.0, status="terminated").status \
+        == "TERMINATED"
+
+
+# --- the traps: these must NOT block a genuine win ---------------------------
+
+def test_the_sebi_annexure_row_is_not_a_termination():
+    """
+    "Details of amendment or reasons for terminations" is printed on EVERY
+    Reg 30 order disclosure, a genuine win included. Reading it as an event
+    would silence the entire rule.
+    """
+    from signals import document_reports_order_loss
+    assert document_reports_order_loss(GENUINE_WIN_TEXT + SEBI_ANNEXURE_ROW) is False
+
+
+def test_quoted_contract_clause_names_are_not_a_termination():
+    """
+    Real EPC wins quote clause 55 "No Compensation for Cancellation" and
+    Clause 68.4 "Cancellation/Determination of Contract" as a matter of course.
+    """
+    from signals import document_reports_order_loss
+    assert document_reports_order_loss(GENUINE_WIN_TEXT + QUOTED_CLAUSE_NAMES) is False
+
+
+def test_hypothetical_termination_language_is_not_a_termination():
+    from signals import document_reports_order_loss
+    for clause in (
+        "The contract may be terminated by either party on 90 days notice.",
+        "The customer reserves the right to terminate the contract for convenience.",
+        "In the event of termination, the Company shall be compensated for work done.",
+    ):
+        assert document_reports_order_loss(GENUINE_WIN_TEXT + clause) is False, clause
+
+
+def test_a_genuine_win_carrying_both_traps_still_scores():
+    """The end-to-end version: full scoring, both traps present, must alert."""
+    s = results(document_type="ORDER_WIN",
+                orders=[OrderWin(unit="crore", raw_value=205.89, customer="NTPC",
+                                 scope="design, engineering, procurement and construction",
+                                 quote="the value of the work order is Rs. 205,89,14,000/-")])
+    text = GENUINE_WIN_TEXT + SEBI_ANNEXURE_ROW + QUOTED_CLAUSE_NAMES
+    r = scoring.score_filing(s, text)
+    assert "ORDER_WIN" in r["rules_hit"], r["breakdown"]["rules"][-1]["note"]
+    assert r["order_value_cr"] == 205.89
+
+
+def test_determination_is_not_termination():
+    """
+    "deTERMINATion" contains "termination". Without a word boundary, "basis of
+    determination of price" and "determination of the contract price" — both
+    ordinary in genuine filings — read as the contract being terminated. Found
+    by sweeping cached filings; a related-party policy tripped it.
+    """
+    from signals import document_reports_order_loss
+    for wording in (
+        "Basis of determination of price for the related party transaction.",
+        "the determination of the contract price shall be as per the schedule",
+        "determination of contract value is subject to final measurement",
+    ):
+        assert document_reports_order_loss(GENUINE_WIN_TEXT + wording) is False, wording
+
+
+def test_unrelated_terminations_are_not_order_losses():
+    """
+    Employment, nomination and option terminations are common in filings and
+    have nothing to do with an order. All four of these appeared in the cached
+    live corpus.
+    """
+    from signals import document_reports_order_loss
+    for wording in (
+        "management of career endings resulting from retirement or termination "
+        "of employment",
+        "Form SH-14 and ISR-3: Cancellation of Nomination",
+        "conditions under which the option may lapse in case of termination of "
+        "employment for misconduct",
+        "Forfeiture / cancellation of options granted",
+    ):
+        assert document_reports_order_loss(GENUINE_WIN_TEXT + wording) is False, wording
+
+
+def test_the_real_termination_wording_is_still_caught():
+    """Having excluded the noise, the actual statements must still be found."""
+    from signals import document_reports_order_loss
+    for wording in (
+        "Termination of work order - intimation pursuant to Regulation 30",
+        "the Company has received a communication regarding termination of the "
+        "aforesaid work order",
+        "the work order was subsequently terminated by SDAT",
+        'the contract "is hereby terminated with immediate effect"',
+        "Cancellation of the purchase order received earlier",
+        "the Letter of Award has been withdrawn by the authority",
+    ):
+        assert document_reports_order_loss(wording) is True, wording
+
+
 if __name__ == "__main__":
     passed = failed = 0
     for name, fn in sorted(globals().items()):

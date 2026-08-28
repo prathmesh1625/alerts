@@ -109,11 +109,38 @@ class OrderWin(BaseModel):
         default="",
         description="The sentence from the filing that states this order and its value",
     )
+    status: str = Field(
+        default="NEW",
+        description=(
+            "What is HAPPENING to this order in THIS filing. One of: "
+            "'NEW' - the company has just won or received it; "
+            "'TERMINATED' - it has been cancelled, terminated, withdrawn, "
+            "foreclosed or rescinded, so the company is LOSING this work; "
+            "'AMENDED' - its value or scope has been revised; "
+            "'COMPLETED' - it has been executed and closed. "
+            "Read the SUBJECT LINE and the narrative, not the annexure: a "
+            "termination letter still describes the order in full and still "
+            "states its value, because it is telling you what is being taken "
+            "away. If the filing says the order was terminated or cancelled, "
+            "this is 'TERMINATED' no matter how positively the order itself "
+            "is described."
+        ),
+    )
 
     @field_validator("unit", "customer", "scope", "quote", mode="before")
     @classmethod
     def _none_is_blank(cls, v):
         return "" if v is None else v
+
+    @field_validator("status", mode="before")
+    @classmethod
+    def _status_default(cls, v):
+        # Absent or unrecognised means "the model did not tell us", which must
+        # behave exactly as it did before this field existed. The document-level
+        # check in document_reports_order_loss is what catches the case where
+        # the model is silent AND the order is being lost.
+        v = (v or "").strip().upper()
+        return v if v in {"NEW", "TERMINATED", "AMENDED", "COMPLETED"} else "NEW"
 
 
 class FilingSignals(BaseModel):
@@ -372,20 +399,107 @@ _IS_AN_ORDER_RE = re.compile(
 )
 
 
+# Losing an order is reported in the same language as winning one, and the
+# order itself is described in full — because the filing's whole purpose is to
+# say what is being taken away. RPPINFRA's "Termination of work order" was
+# scored 27.94 STRONG as an "Order win Rs 205.89 Cr". The order was real; the
+# company was losing it.
+#
+# Neither the whitelist nor the blacklist can see this. They test the ORDER,
+# and the order is genuine — the model's supporting quote was "the value of the
+# work order is Rs. 205,89,14,000/-", which is clean, accurate, and says nothing
+# about termination. The inversion is in the EVENT, so it has to be read from
+# the document as a whole.
+#
+# Two things in a termination letter look like an event and are not. Both
+# appear in the RPPINFRA filing, and both also appear in genuine order wins,
+# so they are cut out before the search rather than reasoned about after it.
+_TERMINATION_NOISE_RE = re.compile(
+    # 1. The SEBI Reg 30 annexure prints this row in EVERY order disclosure,
+    #    a genuine win included (where it is filled in "Not applicable").
+    r"details of amendment or +reasons for terminations?|"
+    r"reasons for terminations? +and impact|"
+    # 2. Contract CLAUSE NAMES, which real EPC wins quote routinely. Here:
+    #    clause 55 "No Compensation for Cancellation / Reduction of Works" and
+    #    Clause 68.4 "Cancellation/Determination of Contract in Full or Part".
+    #    Quoted titles, so the quotes are what identify them.
+    r"[\"“‘][^\"”’\n]{0,90}"
+    r"(?:cancellation|termination|determination)[^\"”’\n]{0,90}[\"”’]|"
+    # Hypothetical and contractual language — a possibility, not an event.
+    r"may be terminated|right to terminate|liable (?:to|for) termination|"
+    r"in (?:the )?event of (?:any )?termination|termination clause|"
+    r"terms? (?:and conditions )?of termination|subject to termination",
+    re.IGNORECASE,
+)
+
+# What is left after the noise is cut: statements that this order has actually
+# ended. Each requires the termination verb to attach to the ORDER, so that a
+# terminated lease, employment or unrelated agreement in the same document does
+# not condemn a genuine order win alongside it.
+#
+# Every alternative is word-anchored, and that \b is load-bearing: "deTERMINATion"
+# contains "termination", so an unanchored pattern reads "determination of the
+# contract price" — ordinary wording in a genuine order win — as a termination
+# of the contract. Found by sweeping the cached filings, where a related-party
+# policy tripped it on "basis of determination of price".
+_ORDER_LOST_RE = re.compile(
+    r"\bterminat(?:ion|ed|es|ing) of (?:the |our |its |this |said |above |aforesaid |"
+    r"captioned )*(?:work |purchase |supply |subject )?"
+    r"(?:order|contract|loa|letter of award|project)|"
+    r"(?:order|contract|loa|letter of award|project|work)s? +"
+    r"(?:has |have |was |were |is |are |stands? |being )*(?:been +)?(?:hereby +)?"
+    # An adverb routinely sits here — "was SUBSEQUENTLY terminated", "is HEREBY
+    # terminated", "has since been cancelled" — and dropping it loses the match.
+    r"(?:\w+ly +)?"
+    r"\b(?:terminated|cancelled|canceled|withdrawn|foreclosed|rescinded|revoked)|"
+    r"\b(?:cancellation|withdrawal|foreclosure|revocation|rescission) of "
+    r"(?:the |our |its |this |said |above |aforesaid |captioned )*"
+    r"(?:work |purchase |supply )?(?:order|contract|loa|letter of award|project)|"
+    r"\bterminated with immediate effect",
+    re.IGNORECASE,
+)
+
+
+def document_reports_order_loss(pdf_text: str) -> bool:
+    """
+    True when the filing reports an order ENDING rather than being won.
+
+    The deterministic backstop to OrderWin.status. The model reads the event
+    and is usually right, but a termination letter is the one document where
+    everything the extractor looks at points the other way — so this reads the
+    document's own words independently, and either one is enough to reject.
+    """
+    if not pdf_text:
+        return False
+    # Collapse first: PDFs hard-wrap mid-sentence, and "termination of the\n
+    # aforesaid work order" must read as one phrase.
+    blob = re.sub(r"\s+", " ", pdf_text)
+    blob = _TERMINATION_NOISE_RE.sub(" ", blob)
+    return bool(_ORDER_LOST_RE.search(blob))
+
+
+def order_is_a_win(order: OrderWin) -> bool:
+    """False when the filing is reporting this order ending, not starting."""
+    return order.status == "NEW"
+
+
 def is_real_order(order: OrderWin) -> bool:
     """
     True only when the document actually describes winning an order.
 
-    Two tests, and the POSITIVE one is what makes this robust:
+    Three tests, and the POSITIVE one is what makes this robust:
 
+      * the order must be being WON, not terminated, amended or closed out;
       * the scope or quote must name an order, contract, award or the work
         involved — a document has to say it won something;
       * and must not be one of the corporate actions or regulatory matters
         that carry a large rupee figure without being business.
 
-    Checked against the order's own scope and quote, which are the document's
-    words, rather than the model's label for the document.
+    The last two are checked against the order's own scope and quote, which are
+    the document's words, rather than the model's label for the document.
     """
+    if not order_is_a_win(order):
+        return False
     blob = "{} {}".format(order.scope or "", order.quote or "")
     if not blob.strip():
         return False
@@ -422,13 +536,21 @@ def order_value_cr(order: OrderWin):
     return parsed
 
 
-def total_order_value_cr(signals: FilingSignals):
-    """Sum of every disclosed order value in the filing, or None if none were."""
-    values = [order_value_cr(o) for o in (signals.orders or [])]
+def total_order_value_cr(signals: FilingSignals, pdf_text: str = ""):
+    """
+    Sum of every disclosed order value in the filing, or None if none were.
+
+    Pass pdf_text wherever it is available: without it a filing whose model
+    output did not mark the termination reports the value of an order the
+    company is losing, which is the reading that has to be avoided.
+    """
+    values = [order_value_cr(o) for o in real_orders(signals, pdf_text)]
     values = [v for v in values if v is not None]
     return round(sum(values), 2) if values else None
 
 
-def real_orders(signals: FilingSignals):
-    """The orders that survived the corporate-action filter."""
+def real_orders(signals: FilingSignals, pdf_text: str = ""):
+    """The orders that survived the corporate-action and termination filters."""
+    if document_reports_order_loss(pdf_text):
+        return []
     return [o for o in (signals.orders or []) if is_real_order(o)]

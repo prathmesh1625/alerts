@@ -71,6 +71,12 @@ rather than the recipient.
 value_cr null.
 - Order values are often stated with GST included or excluded — take the number \
 as printed and note the caveat in `notes` if it matters.
+- ALWAYS set `status`. A filing that TERMINATES or CANCELS an order describes \
+that order in full and states its value, because its whole purpose is to say \
+what is being taken away — so the order looks exactly like a win. Read the \
+SUBJECT line: "Termination of work order" is status TERMINATED, however \
+favourably the work itself is described further down. Losing a contract is the \
+opposite of winning one, and reporting it as a win is worse than missing it.
 
 document_type:
 - RESULTS   - quarterly or annual financial results
