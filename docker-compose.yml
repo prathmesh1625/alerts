@@ -83,6 +83,53 @@ services:
           cpus: "0.25"
           memory: 256M
 
+  # --- pushes alerts to WhatsApp --------------------------------------------
+  #
+  # Its own service on purpose. Scoring a filing and telling someone about it
+  # fail for unrelated reasons, and a closed 24-hour window, an expired token
+  # or a WhatsApp outage must not stop filings being analysed.
+  #
+  # OFF unless ALERT_WHATSAPP_ENABLED=true AND ALERT_WHATSAPP_RECIPIENTS names
+  # the numbers. It sends from the same Meta phone number as the NSE bot, which
+  # has 130 paying users on it, so it refuses to start rather than guess at an
+  # audience - see the notes in engine/config.py.
+  alert-notifier:
+    build:
+      context: .
+      dockerfile: engine/Dockerfile
+    container_name: alert_notifier
+    restart: always
+    command: python notifier.py
+    environment:
+      - STANDALONE=true
+      - DB_HOST=alert-db
+      - DB_PORT=5432
+      - DB_NAME=${ALERT_DB_NAME:-alerts}
+      - DB_USER=${ALERT_DB_USER:-alerts}
+      - DB_PASSWORD=${ALERT_DB_PASSWORD:?ALERT_DB_PASSWORD must be set}
+      - WHATSAPP_ENABLED=${ALERT_WHATSAPP_ENABLED:-false}
+      - WHATSAPP_TOKEN=${ALERT_WHATSAPP_TOKEN:-}
+      - WHATSAPP_PHONE_NUMBER_ID=${ALERT_WHATSAPP_PHONE_NUMBER_ID:-}
+      # Comma-separated, full international form (91XXXXXXXXXX). Empty means
+      # send to nobody, and the notifier refuses to start.
+      - WHATSAPP_RECIPIENTS=${ALERT_WHATSAPP_RECIPIENTS:-}
+      - WHATSAPP_TEMPLATE_NAME=${ALERT_WHATSAPP_TEMPLATE_NAME:-nse_bot}
+      - WHATSAPP_MIN_SCORE=${ALERT_WHATSAPP_MIN_SCORE:-0}
+      - WHATSAPP_MAX_PER_DAY=${ALERT_WHATSAPP_MAX_PER_DAY:-25}
+      - WHATSAPP_MAX_AGE_MIN=${ALERT_WHATSAPP_MAX_AGE_MIN:-180}
+      - PUBLIC_BASE_URL=${ALERT_PUBLIC_BASE_URL:-https://alerts.equityalerts.in}
+      # Unused by this process, but config.py reads it at import.
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+    depends_on:
+      alert-db:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          # One indexed SELECT and an HTTPS POST per alert.
+          cpus: "0.15"
+          memory: 192M
+
   # --- reads the filings worth reading, applies the formula ------------------
   alert-agent:
     build:

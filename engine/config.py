@@ -373,3 +373,59 @@ CORS_ORIGINS = [
     for o in os.getenv("CORS_ORIGINS", "http://localhost:5174,http://localhost:5173").split(",")
     if o.strip()
 ]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  WhatsApp delivery
+#
+#  This sends from the SAME Meta phone number as the NSE bot, which has 130
+#  paying users on it. WhatsApp scores quality per phone number, so the
+#  defaults here are deliberately timid and every one of them is a brake:
+#
+#    * OFF unless switched on.
+#    * Sends ONLY to numbers named in WHATSAPP_RECIPIENTS. There is no path
+#      that reads a subscriber list, and none that reads the NSE bot's
+#      database — the two products share a phone number and nothing else.
+#    * A daily cap, so a bug in the formula cannot turn into a hundred
+#      messages from the number the paying product depends on.
+#
+#  Widening any of these is a deliberate act, not a default.
+# ─────────────────────────────────────────────────────────────────────────────
+WHATSAPP_ENABLED = _bool("WHATSAPP_ENABLED", False)
+WHATSAPP_TOKEN = os.getenv("WHATSAPP_TOKEN", "")
+WHATSAPP_PHONE_NUMBER_ID = os.getenv("WHATSAPP_PHONE_NUMBER_ID", "")
+
+# Explicit allowlist, comma-separated, in full international form (91XXXXXXXXXX).
+# Empty means send to nobody, and the notifier refuses to run rather than
+# guessing at an audience.
+WHATSAPP_RECIPIENTS = [
+    n.strip() for n in os.getenv("WHATSAPP_RECIPIENTS", "").split(",") if n.strip()
+]
+
+# The approved template used when the 24-hour window has closed. "nse_bot" is
+# already approved on this WABA and takes 5 body variables
+# ({{1}} headline, {{2}} company, {{3}} event + time, {{4}} detail, {{5}} link),
+# which the alert fills. Set empty to disable the fallback, in which case an
+# out-of-window alert raises rather than being silently dropped.
+WHATSAPP_TEMPLATE_NAME = os.getenv("WHATSAPP_TEMPLATE_NAME", "nse_bot")
+WHATSAPP_TEMPLATE_LANG = os.getenv("WHATSAPP_TEMPLATE_LANG", "en")
+
+# Only send alerts at or above this score, independent of what the dashboard
+# shows. A dashboard row is glanced at; a WhatsApp message interrupts.
+WHATSAPP_MIN_SCORE = _float("WHATSAPP_MIN_SCORE", 0.0)
+
+# Hard ceiling per calendar day, counted from the notified_alerts table so it
+# survives a restart. ~4 order alerts/day is normal; 25 means something is
+# wrong and the cap is what stops it reaching the number.
+WHATSAPP_MAX_PER_DAY = _int("WHATSAPP_MAX_PER_DAY", 25)
+
+# Alerts older than this are never sent, so a first run against a populated
+# database does not replay history to someone's phone.
+WHATSAPP_MAX_AGE_MIN = _int("WHATSAPP_MAX_AGE_MIN", 180)
+
+# How often the notifier looks for alerts it has not sent yet.
+WHATSAPP_POLL_SEC = _int("WHATSAPP_POLL_SEC", 20)
+
+# Public base for the PDF link in a message. The API serves the filing at
+# /api/alerts/{id}/pdf, so this is the dashboard's own origin.
+PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "https://alerts.equityalerts.in")

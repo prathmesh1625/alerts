@@ -204,6 +204,25 @@ ALTER TABLE volume_alerts
 ALTER TABLE volume_alerts
     ADD COLUMN IF NOT EXISTS detected_at TIMESTAMPTZ DEFAULT NOW();
 
+-- One row per (recipient, alert) actually delivered over WhatsApp.
+--
+-- The composite primary key IS the dedup: a restart, a second worker, or a
+-- re-scored alert cannot resend a message someone has already received. That
+-- matters more here than on the dashboard, where a duplicate row is untidy
+-- but a duplicate WhatsApp message is a complaint against a phone number
+-- shared with the paying product.
+CREATE TABLE IF NOT EXISTS notified_alerts (
+    phone           VARCHAR(20)  NOT NULL,
+    announcement_id INTEGER      NOT NULL,
+    channel         VARCHAR(10),
+    wamid           TEXT,
+    sent_at         TIMESTAMPTZ DEFAULT NOW(),
+    PRIMARY KEY (phone, announcement_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_notified_alerts_sent_at
+    ON notified_alerts(sent_at DESC);
+
 -- Company size, in rupees crore, cached per symbol. Fetched lazily for the
 -- handful of symbols about to alert rather than for the whole market, and
 -- refreshed on a TTL. See marketcap.py for why BSE is the source.
@@ -595,6 +614,72 @@ def fetch_alerts(days: int, min_score: float, symbol=None, limit: int = 200) -> 
     with get_cursor() as cur:
         cur.execute(sql, params)
         return [dict(r) for r in cur.fetchall()]
+
+
+# -----------------------------------------------------------------------------
+#  WhatsApp delivery
+# -----------------------------------------------------------------------------
+
+def fetch_unnotified_alerts(phone: str, min_score: float, max_age_min: int,
+                            limit: int = 20) -> list:
+    """
+    Alerts this recipient has not been sent yet, oldest first.
+
+    The age bound is not an optimisation. Without it, switching delivery on
+    against a populated database would replay every alert ever scored to
+    someone's phone in one burst — and the first thing that phone number does
+    is get reported.
+
+    Oldest first so a batch arrives in the order the market produced it.
+    """
+    sql = """
+        SELECT a.*
+          FROM stock_alerts a
+     LEFT JOIN notified_alerts n
+            ON n.announcement_id = a.announcement_id AND n.phone = %s
+         WHERE n.announcement_id IS NULL
+           AND a.score >= %s
+           AND a.created_at >= NOW() - (%s * INTERVAL '1 minute')
+      ORDER BY a.announced_at ASC, a.id ASC
+         LIMIT %s
+    """
+    with get_cursor() as cur:
+        cur.execute(sql, (phone, min_score, max_age_min, limit))
+        return [dict(r) for r in cur.fetchall()]
+
+
+def count_notified_today(phone: str) -> int:
+    """
+    How many messages this recipient has had today, in IST.
+
+    Read from the table rather than counted in memory, so the daily cap holds
+    across a restart — which is exactly when a runaway would otherwise reset
+    itself and start again.
+    """
+    with get_cursor() as cur:
+        cur.execute(
+            "SELECT COUNT(*) AS n FROM notified_alerts "
+            "WHERE phone = %s AND " + _day_window_tz("sent_at"),
+            (phone, 1),
+        )
+        return int(cur.fetchone()["n"])
+
+
+def mark_notified(phone: str, announcement_id: int, channel: str,
+                  wamid: str = "") -> bool:
+    """
+    Record a delivery. False if this recipient already had this alert.
+
+    ON CONFLICT DO NOTHING makes the write idempotent, so two workers racing
+    on the same alert cannot both count as a send.
+    """
+    with get_cursor() as cur:
+        cur.execute(
+            "INSERT INTO notified_alerts (phone, announcement_id, channel, wamid) "
+            "VALUES (%s, %s, %s, %s) ON CONFLICT DO NOTHING",
+            (phone, announcement_id, channel, wamid or ""),
+        )
+        return cur.rowcount > 0
 
 
 # -----------------------------------------------------------------------------

@@ -216,6 +216,50 @@ order won" — so a rejection can be checked rather than taken on trust.
 Verified on the live filing: with even a deliberately generic title, the IDBI
 CARE Ratings PDF now yields `rules_hit: []`, score `0.0`, no alert.
 
+## WhatsApp delivery
+
+Alerts can be pushed to WhatsApp using the same mechanism as the NSE bot: the
+Meta Cloud API directly, free-form text inside WhatsApp's **24-hour customer
+service window**, and an approved template outside it. The fallback is driven
+by Meta's own error `131047` rather than by tracking the window ourselves — any
+window state we kept would be a guess, and a wrong guess means either a message
+that never arrives or a needless template send.
+
+`whatsapp.py` and `notifier.py` are self-contained. Nothing is imported from
+the NSE bot's project and nothing in it is read or written; the two products
+share a phone number and nothing else.
+
+**It is off by default, and that matters.** It sends from the same Meta number
+the NSE bot runs on, which carries 130 paying users, and WhatsApp scores
+message quality *per phone number* — so complaints here land on the paying
+product. Three brakes, all defaulting closed:
+
+| Brake | Default | What it stops |
+|-------|---------|---------------|
+| `WHATSAPP_ENABLED` | `false` | Deploying the service does not start it sending |
+| `WHATSAPP_RECIPIENTS` | empty | No default audience. Empty means send to nobody, and the notifier refuses to start rather than guess |
+| `WHATSAPP_MAX_PER_DAY` | 25 | A formula bug cannot become a hundred messages. Counted from the database, so a restart cannot reset it |
+
+There is no code path that reads a subscriber list — `test_notifier.py` asserts
+the module contains no such lookup. `WHATSAPP_MAX_AGE_MIN` (180) additionally
+stops a first run against a populated database replaying history to a phone.
+
+A delivery is recorded only **after** the API confirms. Marking a failed send as
+delivered would be worse than losing it: the `(phone, announcement_id)` key
+means that alert would then never be retried.
+
+```bash
+cd engine
+python notifier.py --dry-run    # print what would be sent, send nothing
+python notifier.py --once       # one pass, then exit
+python notifier.py              # the loop the container runs
+```
+
+To switch it on, set `ALERT_WHATSAPP_ENABLED=true`, `ALERT_WHATSAPP_TOKEN`,
+`ALERT_WHATSAPP_PHONE_NUMBER_ID` and `ALERT_WHATSAPP_RECIPIENTS`
+(comma-separated, `91XXXXXXXXXX`, no `+`). Message the number first — that opens
+the 24-hour window, and until it is open every send goes out as a template.
+
 ## Size floor
 
 A filing says nothing about how big the business behind it is. A shell company
