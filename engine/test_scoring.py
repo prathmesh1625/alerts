@@ -391,6 +391,35 @@ def test_a_genuine_win_carrying_both_traps_still_scores():
     assert r["order_value_cr"] == 205.89
 
 
+def test_a_related_party_approval_is_not_an_order():
+    """
+    An AGM resolution authorising a CEILING for related-party dealings has a
+    counterparty, a scope and a value in crore, so it extracts exactly like an
+    order. ASAHIINDIA's annual report produced three of these and scored 30.0
+    STRONG as "Order win Rs 92,850 Cr". Permission to transact is not business.
+    """
+    rpt = OrderWin(
+        unit="crore", raw_value=1500.0, customer="Maruti Suzuki India Limited",
+        scope="contract(s) / arrangement(s) / transaction(s)",
+        quote="the consent of Members is hereby accorded for entering into "
+              "and / or carrying out and / or continuing with existing, "
+              "contract(s) / arrangement(s) / transaction(s)")
+    r = scoring.score_filing(results(document_type="OTHER", orders=[rpt]))
+    assert r["rules_hit"] == [], r["rules_hit"]
+    assert r["order_value_cr"] is None
+    assert r["qualifies"] is False
+
+
+def test_related_party_wording_does_not_block_a_normal_order():
+    """The counterpart risk: "party" appears in ordinary contract language."""
+    ok = OrderWin(unit="crore", raw_value=412.5, customer="NTPC Limited",
+                  scope="supply and installation of equipment",
+                  quote="the Company has received a work order valued at "
+                        "Rs. 412.50 crore from NTPC Limited")
+    r = scoring.score_filing(results(document_type="ORDER_WIN", orders=[ok]))
+    assert "ORDER_WIN" in r["rules_hit"], r["breakdown"]["rules"][-1]["note"]
+
+
 def test_determination_is_not_termination():
     """
     "deTERMINATion" contains "termination". Without a word boundary, "basis of

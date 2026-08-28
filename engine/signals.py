@@ -370,6 +370,14 @@ _NOT_AN_ORDER_RE = re.compile(
     r"cash credit|overdraft|letter of credit|bank guarantee|"
     r"borrowing|sanction(?:ed|ing)? (?:of )?(?:a |the )?(?:loan|limit|facilit)|"
     r"loan (?:agreement|facility|sanction|from)|"
+    # Shareholder approvals. An AGM notice asks members to authorise a CEILING
+    # for related-party dealings, and the resolution reads like an order: a
+    # counterparty, a scope, a value in crore. ASAHIINDIA's annual report was
+    # extracted as Rs 92,850 Cr of orders from Maruti Suzuki and AGC on exactly
+    # this text. Permission to transact is not business won.
+    r"related part(?:y|ies)|consent of (?:the )?members|"
+    r"omnibus approval|ordinary resolution|special resolution|"
+    r"members? (?:is|are) hereby accorded|approval of (?:the )?(?:members|shareholders)|"
     # Credit-rating filings analyse past financials and list facility amounts.
     r"credit rating|rating action|reaffirm|"
     r"care ratings|crisil|\bicra\b|india ratings|brickwork|acuit|infomerics",

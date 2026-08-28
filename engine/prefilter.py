@@ -156,6 +156,32 @@ _PRESENTATION_MARKERS = (
 )
 
 
+# An annual report / AGM notice. The title forms are already on
+# _NEVER_RELEVANT_TITLE, but NSE frequently files these under a generic caption
+# — "General Updates" is what the live feed actually sends — and then only the
+# body can stop them.
+#
+# It has to be stopped. ASAHIINDIA's Integrated Annual Report reached the model
+# under a generic title and its AGM notice was read as Rs 92,850 Cr of orders
+# from Maruti Suzuki and AGC: the related-party transaction resolutions are
+# approval CEILINGS the members are asked to authorise, not business won. It
+# scored 30.0 STRONG.
+#
+# Same two-marker rule as the others, so a filing that mentions the annual
+# report once in passing is unaffected.
+_ANNUAL_REPORT_MARKERS = (
+    (re.compile(r"annual general meeting", re.IGNORECASE), 2),
+    (re.compile(r"(?:integrated )?annual report", re.IGNORECASE), 3),
+    (re.compile(r"ordinary resolution", re.IGNORECASE), 2),
+    (re.compile(r"remote e-?voting", re.IGNORECASE), 1),
+    (re.compile(r"related part(?:y|ies) transaction", re.IGNORECASE), 3),
+    (re.compile(r"omnibus approval", re.IGNORECASE), 1),
+    (re.compile(r"(?:board|directors)['’]?s? report", re.IGNORECASE), 1),
+    (re.compile(r"corporate governance report", re.IGNORECASE), 1),
+    (re.compile(r"notice is hereby given", re.IGNORECASE), 1),
+)
+
+
 # Enforcement and tax matters. These carry large rupee figures and the word
 # "order", so without them a penalty reads as new business — the one failure
 # mode here that is worse than a missed alert, because it points the wrong way.
@@ -213,6 +239,8 @@ def restates_old_results(title: str, text: str = "") -> tuple:
         return True, "reads as an earnings-call transcript"
     if _markers_clear(text, _PRESENTATION_MARKERS) >= 2:
         return True, "reads as an investor presentation"
+    if _markers_clear(text, _ANNUAL_REPORT_MARKERS) >= 2:
+        return True, "reads as an annual report or AGM notice"
     return False, ""
 
 

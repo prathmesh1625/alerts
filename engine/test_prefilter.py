@@ -315,6 +315,49 @@ def test_termination_screening_does_not_swallow_genuine_wins():
         assert ok, "should have opened: {} ({})".format(title, why)
 
 
+# -----------------------------------------------------------------------------
+#  Annual reports and AGM notices, under a generic title
+#
+#  NSE files these under captions like "General Updates", so the title screen
+#  never sees them. ASAHIINDIA's Integrated Annual Report got through and its
+#  RPT resolutions were read as Rs 92,850 Cr of orders from Maruti Suzuki.
+# -----------------------------------------------------------------------------
+
+AGM_BODY = """
+Sub: Integrated Annual Report for the Financial Year 2025-26 and Notice of the
+41st Annual General Meeting. Notice is hereby given that the Annual General
+Meeting of the members will be held as set out in the Annual Report.
+To consider and if thought fit to pass the following as an Ordinary Resolution:
+RESOLVED THAT approval of the members be and is hereby accorded for related
+party transactions with Maruti Suzuki India Limited up to Rs. 1,500 crore.
+The Board's Report and the Corporate Governance Report form part of the
+Integrated Annual Report. Members may cast their vote by remote e-voting.
+This is an Ordinary Resolution concerning related party transactions.
+"""
+
+
+def test_an_agm_notice_is_stopped_by_its_body():
+    for title in ("General Updates", "Updates", "Intimation under Regulation 30"):
+        ok, why = should_open_pdf(title)
+        assert ok, "title screen is not expected to catch this"
+        analyse, why2 = should_analyze(title, AGM_BODY)
+        assert not analyse, "AGM notice reached the model under {!r}".format(title)
+        assert "annual report" in why2.lower(), why2
+
+
+def test_a_passing_mention_of_the_annual_report_is_not_enough():
+    """
+    Two markers must clear. An order win that refers to the annual report once
+    must still be analysed — this is the check that keeps the rule alive.
+    """
+    win = ("We wish to inform you that the Company has received a work order "
+           "from NTPC Limited valued at Rs. 412.50 crore for the supply and "
+           "installation of equipment. Further details will be set out in the "
+           "Annual Report for the year.")
+    ok, why = should_analyze("Receipt of work order", win)
+    assert ok, why
+
+
 if __name__ == "__main__":
     passed = failed = 0
     for name, fn in sorted(globals().items()):
