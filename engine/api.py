@@ -103,9 +103,11 @@ def get_config():
     so retuning a weight in config.py cannot leave the UI describing rules that
     are no longer in force.
     """
-    return {
-        "rules": [
+    # Only the rules actually in force. The dashboard renders from this, so a
+    # rule switched off in config cannot leave the UI describing it as live.
+    all_rules = [
             {
+                "enabled": config.PROFIT_RULE_ENABLED,
                 "key": "PROFIT_GROWTH",
                 "label": "Profit growth",
                 "threshold": config.PROFIT_GROWTH_MIN_PCT,
@@ -114,6 +116,7 @@ def get_config():
                 "full_at": config.PROFIT_GROWTH_FULL_PCT,
             },
             {
+                "enabled": config.REVENUE_RULE_ENABLED,
                 "key": "REVENUE_GROWTH",
                 "label": "Revenue growth",
                 "threshold": config.REVENUE_GROWTH_MIN_PCT,
@@ -122,6 +125,7 @@ def get_config():
                 "full_at": config.REVENUE_GROWTH_FULL_PCT,
             },
             {
+                "enabled": config.ORDER_RULE_ENABLED,
                 "key": "ORDER_WIN",
                 "label": "Order win",
                 "threshold": config.ORDER_MIN_CR,
@@ -129,7 +133,10 @@ def get_config():
                 "weight": config.ORDER_WEIGHT,
                 "full_at": config.ORDER_FULL_CR,
             },
-        ],
+    ]
+    return {
+        "rules": [r for r in all_rules if r["enabled"]],
+        "disabled_rules": [r["label"] for r in all_rules if not r["enabled"]],
         "volume_rule": {
             "key": "VOLUME_SPIKE",
             "label": "Volume spike",

@@ -109,6 +109,17 @@ _RESTATES_RESULTS_TITLE = re.compile(
     # Both are last year's numbers. Regulation 33 is deliberately ABSENT: that
     # is the regulation quarterly RESULTS are filed under, so excluding it would
     # suppress the filings this screen exists to catch.
+    # Credit-rating filings restate past financials AND list facility amounts
+    # in crore. IDBI Bank's CARE Ratings letter was read as a Rs 35,000 crore
+    # "certificate of deposit" order win.
+    r"credit rating|rating rationale|rating action|"
+    # The agencies phrase it every possible way round: "Rating by CARE",
+    # "CRISIL reaffirms its rating", "rating upgraded". Match the act, not just
+    # the agency's name.
+    r"rating by |reaffirms? (?:its )?rating|"
+    r"ratings? (?:reaffirmed|assigned|revised|upgraded|downgraded|withdrawn)|"
+    r"(?:reaffirmation|assignment|revision) of rating|"
+    r"care ratings|\bcrisil\b|\bicra\b|india ratings|brickwork|acuit|infomerics|"
     r"annual report|"
     r"reg(?:ulation)?\.?\s*34\b|"
     r"reg(?:ulation)?\.?\s*36\s*\(\s*1\s*\)|"

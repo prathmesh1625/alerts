@@ -146,13 +146,13 @@ def test_statement_unit_fills_in_for_a_figure_that_lacks_one():
 # -----------------------------------------------------------------------------
 
 def test_order_value_in_crore():
-    o = OrderWin(raw_value=412.50, unit="crore",
+    o = OrderWin(raw_value=412.50, unit="crore", scope="supply of equipment",
                  quote="The value of the order is Rs. 412.50 crore")
     assert close(order_value_cr(o), 412.50)
 
 
 def test_order_value_stated_in_lakh():
-    o = OrderWin(raw_value=41250.0, unit="lakh",
+    o = OrderWin(raw_value=41250.0, unit="lakh", scope="supply of equipment",
                  quote="The order value is Rs. 41,250 lakh")
     assert close(order_value_cr(o), 412.50)
 
@@ -162,32 +162,35 @@ def test_quote_overrides_a_misread_value():
     Order filings state the value inline, so the sentence is a check on the
     model. When they disagree, the document's own words win.
     """
-    o = OrderWin(raw_value=41.25, unit="crore",       # model misread by 10x
+    o = OrderWin(raw_value=41.25, unit="crore", scope="supply of equipment",
                  quote="The value of the order is Rs. 412.50 crore (excluding GST)")
     assert close(order_value_cr(o), 412.50)
 
 
 def test_quote_agreeing_within_rounding_is_left_alone():
-    o = OrderWin(raw_value=412.50, unit="crore",
+    o = OrderWin(raw_value=412.50, unit="crore", scope="supply of equipment",
                  quote="The value of the order is Rs. 412.50 crore")
     assert close(order_value_cr(o), 412.50)
 
 
 def test_value_survives_an_unparseable_quote():
-    o = OrderWin(raw_value=412.50, unit="crore", quote="the order was received today")
+    o = OrderWin(raw_value=412.50, unit="crore", scope="supply of equipment",
+                 quote="the order was received today")
     assert close(order_value_cr(o), 412.50)
 
 
 def test_value_recovered_from_quote_when_fields_are_empty():
-    o = OrderWin(raw_value=None, unit="",
+    o = OrderWin(raw_value=None, unit="", scope="supply of equipment",
                  quote="an order valued at Rs. 87.20 crore was received")
     assert close(order_value_cr(o), 87.20)
 
 
 def test_orders_are_summed_in_crore():
     s = FilingSignals(orders=[
-        OrderWin(raw_value=412.50, unit="crore", quote="Rs. 412.50 crore"),
-        OrderWin(raw_value=8720.0, unit="lakh", quote="Rs. 8,720 lakh"),
+        OrderWin(raw_value=412.50, unit="crore", scope="supply order",
+                 quote="order of Rs. 412.50 crore"),
+        OrderWin(raw_value=8720.0, unit="lakh", scope="supply order",
+                 quote="order of Rs. 8,720 lakh"),
     ])
     assert close(total_order_value_cr(s), 499.70, tol=0.01)
 
@@ -290,6 +293,47 @@ def test_inline_parser_handles_indian_grouping():
 
 
 # -----------------------------------------------------------------------------
+
+def test_a_bank_deposit_programme_is_not_an_order():
+    """
+    IDBI Bank's CARE Ratings filing was extracted as a "Certificate of deposit"
+    order of Rs 35,000 crore, scoring the maximum. A bank's funding programme is
+    money RAISED, not business won — the exact case this whitelist exists for.
+    """
+    from signals import is_real_order
+    o = OrderWin(raw_value=35000.0, unit="crore", scope="Certificate of deposit",
+                 quote="Certificate of deposit RBI 35,000.00 CARE A1+ Reaffirmed")
+    assert not is_real_order(o)
+    assert order_value_cr(o) is None
+
+
+def test_borrowings_are_not_orders():
+    from signals import is_real_order
+    for scope, quote in [
+        ("term loan", "secured a term loan of Rs. 250 crore from HDFC Bank"),
+        ("bank facilities", "Long Term Bank Facilities Rs. 500.00 crore"),
+        ("working capital", "sanction of working capital limits of Rs. 80 crore"),
+        ("NCD issue", "issue of non-convertible debentures of Rs. 300 crore"),
+        ("credit rating", "CARE reaffirmed the rating on facilities of Rs. 1,200 crore"),
+    ]:
+        o = OrderWin(raw_value=100.0, unit="crore", scope=scope, quote=quote)
+        assert not is_real_order(o), scope
+
+
+def test_an_order_needs_positive_evidence_not_just_a_number():
+    """
+    A blacklist alone cannot hold — the ways of not being an order are
+    unbounded. The document has to SAY it won something.
+    """
+    from signals import is_real_order
+    vague = OrderWin(raw_value=500.0, unit="crore", scope="general update",
+                     quote="the aggregate amount is Rs. 500 crore")
+    assert not is_real_order(vague)
+
+    real = OrderWin(raw_value=500.0, unit="crore", scope="supply of pipes",
+                    quote="received a work order valued at Rs. 500 crore")
+    assert is_real_order(real)
+
 
 if __name__ == "__main__":
     passed = failed = 0

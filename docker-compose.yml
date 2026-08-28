@@ -127,6 +127,16 @@ services:
       # Start at 1: on first boot everything inside this window is analysed,
       # so a large value is a one-off spike in CPU *and* OpenAI spend.
       - BACKFILL_DAYS=${ALERT_BACKFILL_DAYS:-1}
+      # ONLY the order-win rule is live. Profit and revenue growth are kept in
+      # the code and switched back on with these, once order-win is precise
+      # enough to trust. Raise the bands back to 70/45 at the same time - with
+      # one rule the score spans 21-30, so they are tuned to order SIZE:
+      # under Rs 10 Cr WATCH, to Rs 100 Cr MODERATE, above it STRONG.
+      - PROFIT_RULE_ENABLED=${ALERT_PROFIT_RULE:-false}
+      - REVENUE_RULE_ENABLED=${ALERT_REVENUE_RULE:-false}
+      - ORDER_RULE_ENABLED=${ALERT_ORDER_RULE:-true}
+      - BAND_STRONG=${ALERT_BAND_STRONG:-27}
+      - BAND_MODERATE=${ALERT_BAND_MODERATE:-24}
       - ALERT_MIN_SCORE=${ALERT_MIN_SCORE:-20}
       # Size floor, applied to ALL FOUR rules. A filing says nothing about how
       # big the business behind it is - a shell company reporting 100% profit

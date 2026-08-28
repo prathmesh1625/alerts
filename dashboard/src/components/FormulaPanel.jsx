@@ -21,8 +21,9 @@ export default function FormulaPanel({ config, open, onToggle }) {
                         Alert formula
                     </span>
                     <span className="ml-2 text-xs text-brand-textMuted">
-                        {config.rules.length} rules · alert at score ≥{" "}
-                        {config.alert_min_score} · {config.model}
+                        {config.rules.length}{" "}
+                        {config.rules.length === 1 ? "rule" : "rules"} · alert at
+                        score ≥ {config.alert_min_score} · {config.model}
                     </span>
                 </div>
                 <span
@@ -58,6 +59,16 @@ export default function FormulaPanel({ config, open, onToggle }) {
                         ))}
                     </div>
 
+                    {config.disabled_rules?.length > 0 && (
+                        <p className="mt-3 text-xs text-brand-textMuted">
+                            Currently off:{" "}
+                            <span className="text-brand-slate">
+                                {config.disabled_rules.join(", ")}
+                            </span>{" "}
+                            — being held back until the order-win rule is precise
+                            enough to trust on its own.
+                        </p>
+                    )}
                     <p className="mt-3 text-xs leading-relaxed text-brand-textMuted">
                         Each rule is scored independently. Clearing a rule&apos;s
                         threshold banks {Math.round(config.base_credit * 100)}% of its

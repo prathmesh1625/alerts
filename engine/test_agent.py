@@ -14,6 +14,17 @@ import io
 import os
 import tempfile
 
+import config
+
+# Rules 1 and 2 are OFF in production while the order rule is hardened. These
+# tests exercise the pipeline / rule 4, not which rules are live, so they run
+# with all three enabled — otherwise a profit-growth fixture silently stops
+# producing the alert the test is about.
+config.PROFIT_RULE_ENABLED = True
+config.REVENUE_RULE_ENABLED = True
+config.ORDER_RULE_ENABLED = True
+config.BAND_STRONG = 70.0
+config.BAND_MODERATE = 45.0
 import agent
 import db as db_module
 import marketcap as marketcap_module

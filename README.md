@@ -29,11 +29,16 @@ and owns three new tables of its own in the same database.
 
 ## The formula
 
-| # | Rule | Threshold | Weight | Full credit at |
-|---|------|-----------|--------|----------------|
-| 1 | Profit (PAT) growth, YoY | ≥ **25%** | 35 | +100% |
-| 2 | Revenue growth, YoY | ≥ **50%** | 35 | +200% |
-| 3 | Orders received | ≥ **₹1 Cr** | 30 | ₹1,000 Cr |
+**Only rule 3 is live right now.** Rules 1 and 2 are written, tested and one
+environment variable away from returning — they are switched off deliberately
+while the order rule is made precise enough to trust on its own. See
+[One rule at a time](#one-rule-at-a-time).
+
+| # | Rule | Threshold | Weight | Full credit at | |
+|---|------|-----------|--------|----------------|---|
+| 1 | Profit (PAT) growth, YoY | ≥ **25%** | 35 | +100% | off |
+| 2 | Revenue growth, YoY | ≥ **50%** | 35 | +200% | off |
+| 3 | Orders received | ≥ **₹1 Cr** | 30 | ₹1,000 Cr | **live** |
 
 Each rule is scored **independently**. A rule that fires contributes
 
@@ -50,7 +55,18 @@ A filing becomes an alert at **score ≥ 20**, which is below the smallest singl
 rule contribution (30 × 0.7 = 21) — so **any one rule firing surfaces the
 stock**, and the score orders them.
 
-**Conviction bands:** Strong ≥ 70 · Moderate ≥ 45 · Watch ≥ 20
+**Conviction bands.** With one rule live the whole score range is 21–30, so the
+bands are tuned to order *size* — which is the only thing left varying:
+
+| Band | Score | Means |
+|------|-------|-------|
+| Strong | ≥ **27** | order ≥ ₹100 Cr |
+| Moderate | ≥ **24** | ₹10 Cr – ₹100 Cr |
+| Watch | ≥ 20 | under ₹10 Cr |
+
+Restore `BAND_STRONG=70` / `BAND_MODERATE=45` when rules 1 and 2 come back — the
+bands and the enable flags have to move together, or every filing lands in one
+band.
 
 Growth is measured **year-over-year** — against the *corresponding quarter of
 the previous year*, not the preceding quarter. The prompt is explicit about
@@ -154,6 +170,51 @@ The one tradeoff worth watching: a 20s scrape interval roughly **doubles the
 feed traffic** from this server, since the production scraper is already polling
 at 20s. That cadence is one NSE demonstrably tolerates from this IP, but
 `ALERT_SCRAPE_INTERVAL_SEC` is the first number to raise if throttling appears.
+
+## One rule at a time
+
+Rules 1 and 2 are currently **off**:
+
+```
+PROFIT_RULE_ENABLED=false
+REVENUE_RULE_ENABLED=false
+ORDER_RULE_ENABLED=true
+```
+
+A disabled rule is not evaluated at all — it earns no points, never appears in
+`rules_hit`, and drops out of `max_possible`, so a score is always readable
+against the rules actually in force. `/api/config` serves only the live rules,
+so the dashboard cannot end up describing a rule that is switched off.
+
+**Why.** A single rule is falsifiable. With three of them a wrong alert has
+three possible causes and tuning one moves the other two; with one, every false
+positive is a defect in that rule and can be fixed as such.
+
+### What an order is, and is not
+
+The failure this set-up is built around: a **CARE Ratings** letter for `IDBI`
+was read as a ₹35,000 Cr order win and scored a maximum 30. It was a
+*certificate of deposit* programme — money the bank can borrow, not business it
+has won. The model had correctly tagged the document `OTHER`; nothing used that.
+
+A blacklist alone cannot hold here. Any document carrying a large rupee figure
+can be read as an order, and the ways of *not* being one are unbounded — each
+one found is one more line of a list that never ends. So the test is inverted:
+`signals.is_real_order` requires **positive evidence of a customer relationship**
+in the extracted scope or quote — an order, contract, letter of award/intent,
+LoA, LoI, work order, being L1 or lowest bidder, EPC/turnkey scope, supply,
+installation, commissioning. Nothing that fails to say so counts, whatever
+number it carries.
+
+The blacklist stays on top of that for things that *do* use order-like language:
+loans, facilities, deposits, debentures, buybacks, and regulatory orders
+*against* the company (a ₹364 Cr SEBI penalty is the signal inverted, not a win).
+
+Rejections say which family they fell into — "money raised or borrowed, not an
+order won" — so a rejection can be checked rather than taken on trust.
+
+Verified on the live filing: with even a deliberately generic title, the IDBI
+CARE Ratings PDF now yields `rules_hit: []`, score `0.0`, no alert.
 
 ## Size floor
 
@@ -338,8 +399,9 @@ Against 193 genuine filings from the scraper's storage:
 | Alerts raised | 1 real (`ASIANPAINT`, PAT +69.2% Q4 FY26) |
 
 One alert from 193 filings is the formula working as specified, not a fault:
-≥25% profit *and* ≥50% revenue growth are high bars, and most filings are
-governance documents rather than results. Expect quiet days.
+these are high bars and most filings are governance documents rather than
+results. Expect quiet days. (That run predates the order-only switch, when all
+three rules were live — hence the profit-growth alert.)
 
 ## Checking a single filing
 

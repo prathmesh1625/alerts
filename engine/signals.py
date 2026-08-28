@@ -333,20 +333,65 @@ _NOT_AN_ORDER_RE = re.compile(
     r"penalt|adjudicat|show cause|demand notice|"
     r"orders? passed by|assessment order|"
     r"(?:gst|income[\s\-]tax|tax)\s+(?:department|authorit|demand|notice|officer)|"
-    r"prosecution|search and seizure",
+    r"prosecution|search and seizure|"
+    # Borrowings and financial instruments. A bank's or NBFC's funding lines
+    # are quoted in crore and read exactly like order values: IDBI Bank's
+    # Rs 35,000 crore "certificate of deposit" programme was scored as an order
+    # win. A company that has SECURED A LOAN has not won any business.
+    r"certificate of deposit|\bcd programme\b|"
+    r"bank facilit|credit facilit|term loan|working capital (?:limit|facilit)|"
+    r"cash credit|overdraft|letter of credit|bank guarantee|"
+    r"borrowing|sanction(?:ed|ing)? (?:of )?(?:a |the )?(?:loan|limit|facilit)|"
+    r"loan (?:agreement|facility|sanction|from)|"
+    # Credit-rating filings analyse past financials and list facility amounts.
+    r"credit rating|rating action|reaffirm|"
+    r"care ratings|crisil|\bicra\b|india ratings|brickwork|acuit|infomerics",
+    re.IGNORECASE,
+)
+
+
+# What a real order win actually SAYS. This is a whitelist, and it is the
+# stronger half of the check.
+#
+# A blacklist alone cannot hold: any document with a large rupee figure can be
+# read as an order, and the ways of not being one are unbounded. IDBI Bank's
+# CARE Ratings filing was extracted as a "Certificate of deposit" order of
+# Rs 35,000 crore — a bank's deposit programme, scoring the maximum. Nothing in
+# a blacklist would have anticipated that phrasing; requiring the document to
+# say it WON something does.
+_IS_AN_ORDER_RE = re.compile(
+    r"\border(?:s|ed)?\b|contract|letter of (?:award|intent|acceptance)|"
+    r"\bloa\b|\bloi\b|work order|purchase order|supply order|"
+    r"bagg?ed|awarded|award of|secured (?:a |an |the )?(?:order|contract|project)|"
+    r"received (?:a |an |the )?(?:order|contract|work|purchase)|"
+    r"\bl1\b|lowest bidder|tender|"
+    r"supply (?:of|and)|installation|commission(?:ing)?|"
+    r"engineering, procurement|\bepc\b|turnkey|"
+    r"project (?:win|award)|new project",
     re.IGNORECASE,
 )
 
 
 def is_real_order(order: OrderWin) -> bool:
     """
-    False when this 'order' is actually some other corporate action.
+    True only when the document actually describes winning an order.
 
-    Checked against the order's own scope and quote — the document's words,
-    not the model's label for them.
+    Two tests, and the POSITIVE one is what makes this robust:
+
+      * the scope or quote must name an order, contract, award or the work
+        involved — a document has to say it won something;
+      * and must not be one of the corporate actions or regulatory matters
+        that carry a large rupee figure without being business.
+
+    Checked against the order's own scope and quote, which are the document's
+    words, rather than the model's label for the document.
     """
     blob = "{} {}".format(order.scope or "", order.quote or "")
-    return not _NOT_AN_ORDER_RE.search(blob)
+    if not blob.strip():
+        return False
+    if _NOT_AN_ORDER_RE.search(blob):
+        return False
+    return bool(_IS_AN_ORDER_RE.search(blob))
 
 
 def order_value_cr(order: OrderWin):

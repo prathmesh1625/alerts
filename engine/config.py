@@ -184,6 +184,20 @@ OCR_TIME_BUDGET_SEC = _int("OCR_TIME_BUDGET_SEC", 45)
 #  weight, and a blowout banks all of it. Weights sum to 100.
 # ─────────────────────────────────────────────────────────────────────────────
 
+# ── WHICH RULES ARE LIVE ─────────────────────────────────────────────────────
+#
+# Only the order-win rule is on. Profit and revenue growth are kept in full —
+# code, tests and thresholds — and switched back on by flipping these, once the
+# order rule has been made precise enough to trust.
+#
+# A disabled rule contributes nothing and does not appear in `rules_hit`, and
+# `max_possible` follows the enabled set, so the score means the same thing
+# whatever combination is live.
+PROFIT_RULE_ENABLED  = _bool("PROFIT_RULE_ENABLED", False)
+REVENUE_RULE_ENABLED = _bool("REVENUE_RULE_ENABLED", False)
+ORDER_RULE_ENABLED   = _bool("ORDER_RULE_ENABLED", True)
+
+
 # Rule 1 — profit growth (PAT, year-over-year)
 PROFIT_GROWTH_MIN_PCT = _float("PROFIT_GROWTH_MIN_PCT", 25.0)
 PROFIT_WEIGHT         = _float("PROFIT_WEIGHT", 35.0)
@@ -297,8 +311,19 @@ MARKET_CAP_TTL_DAYS = _int("MARKET_CAP_TTL_DAYS", 7)
 
 
 # Conviction bands used for the dashboard's badge colours.
-BAND_STRONG   = _float("BAND_STRONG", 70.0)
-BAND_MODERATE = _float("BAND_MODERATE", 45.0)
+#
+# Tuned for the ORDER-ONLY set-up. With one rule live the score spans 21 to 30:
+# clearing the threshold banks BASE_CREDIT of the weight, and the rest is the
+# log-scaled size of the order. So the bands map to order size directly:
+#
+#     Rs     1 Cr -> 21     Rs   100 Cr -> 27
+#     Rs    10 Cr -> 24     Rs 1,000 Cr -> 30
+#
+# giving WATCH below ~Rs 10 Cr, MODERATE to ~Rs 100 Cr, STRONG above it.
+# Re-enabling profit and revenue restores a 0-100 range, so raise these back to
+# 70 / 45 at the same time.
+BAND_STRONG   = _float("BAND_STRONG", 27.0)
+BAND_MODERATE = _float("BAND_MODERATE", 24.0)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

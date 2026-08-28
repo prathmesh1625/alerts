@@ -166,7 +166,20 @@ def _rule_orders(signals: FilingSignals) -> dict:
         elif orders and orders[0].customer:
             rule["note"] = "From {}".format(orders[0].customer)
     elif signals.orders and not orders:
-        rule["note"] = "Not an order win (buyback / issue / other corporate action)"
+        # Say WHICH kind of not-an-order, so a rejection is checkable rather
+        # than a shrug. These are the three families that carry a large rupee
+        # figure and get mistaken for business won.
+        blob = " ".join("{} {}".format(o.scope or "", o.quote or "")
+                        for o in signals.orders).lower()
+        if any(k in blob for k in ("loan", "facilit", "deposit", "borrow",
+                                   "debenture", "rating", "credit")):
+            why = "money raised or borrowed, not an order won"
+        elif any(k in blob for k in ("penalt", "adjudicat", "show cause",
+                                     "demand notice", "assessment order")):
+            why = "a regulatory order against the company, not an order won"
+        else:
+            why = "buyback / issue / other corporate action"
+        rule["note"] = "Not an order win ({})".format(why)
     elif orders:
         # An order was announced but no value disclosed — worth saying so on the
         # dashboard, but it cannot clear a rule stated in crore.
@@ -222,8 +235,16 @@ def score_filing(signals: FilingSignals, pdf_text: str = "") -> dict:
     # pdf_text in and this protects every figure below from a 100x error.
     unit = resolve_statement_unit(signals, pdf_text)
 
-    rules = [_rule_profit(signals, unit), _rule_revenue(signals, unit),
-             _rule_orders(signals)]
+    # A disabled rule is not evaluated at all — it contributes no points and
+    # does not appear in rules_hit, so a score cannot come from a rule that is
+    # supposed to be off.
+    rules = []
+    if config.PROFIT_RULE_ENABLED:
+        rules.append(_rule_profit(signals, unit))
+    if config.REVENUE_RULE_ENABLED:
+        rules.append(_rule_revenue(signals, unit))
+    if config.ORDER_RULE_ENABLED:
+        rules.append(_rule_orders(signals))
 
     score = round(sum(r["points"] for r in rules), 2)
     hits = [r["rule"] for r in rules if r["hit"]]
@@ -239,7 +260,9 @@ def score_filing(signals: FilingSignals, pdf_text: str = "") -> dict:
         "order_value_cr": total_order_value_cr(signals),
         "breakdown": {
             "rules": rules,
-            "max_possible": config.PROFIT_WEIGHT + config.REVENUE_WEIGHT + config.ORDER_WEIGHT,
+            # Follows the ENABLED set, so the score is always readable against
+            # what is actually in force.
+            "max_possible": sum(r["weight"] for r in rules),
             "base_credit": config.BASE_CREDIT,
             "statement_unit": unit or "",
         },
