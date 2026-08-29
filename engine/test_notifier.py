@@ -445,6 +445,71 @@ def test_a_retry_storm_stays_under_three_minutes():
             per_attempt * 6)
 
 
+def test_we_wait_longer_for_the_cdn_than_the_cdn_takes():
+    """
+    The window that decides whether a filing is DROPPED rather than delayed.
+
+    BSE routinely lists a filing up to ~2 minutes before its PDF reaches the
+    CDN. This window has been silently cut twice by changes to other constants
+    — to 15s when the poll went 60s->5s, and to 1.7 min by a hand-set retry
+    count — so it is asserted here in MINUTES, against the lag it exists for.
+    """
+    window = config.MAX_ANALYSIS_RETRIES * (0.2 + config.POLL_INTERVAL_SEC)
+    assert window >= 180, (
+        "only {:.1f}s of patience for a PDF that BSE can take 120s to publish "
+        "- filings will be thrown away".format(window))
+
+
+def test_the_retry_count_follows_the_budget_not_a_hand_set_number():
+    """
+    Changing the poll interval must not change how long we wait. That coupling
+    is the actual bug, and a passing count-based test would not catch it.
+    """
+    import importlib, os
+    saved = (os.environ.get("POLL_INTERVAL_SEC"),
+             os.environ.get("MAX_ANALYSIS_RETRIES"))
+    try:
+        os.environ.pop("MAX_ANALYSIS_RETRIES", None)
+        windows = []
+        for poll in ("2", "5", "30"):
+            os.environ["POLL_INTERVAL_SEC"] = poll
+            importlib.reload(config)
+            windows.append(config.MAX_ANALYSIS_RETRIES * config.POLL_INTERVAL_SEC)
+        # Every poll interval yields roughly the same patience, in seconds.
+        assert max(windows) - min(windows) <= 60, windows
+        assert min(windows) >= 240, windows
+    finally:
+        for k, v in zip(("POLL_INTERVAL_SEC", "MAX_ANALYSIS_RETRIES"), saved):
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        importlib.reload(config)
+
+
+def test_a_blank_env_var_reads_as_unset():
+    """
+    Compose writes an empty string for an unset ${VAR}, and int("") raises.
+    Removing a variable must take the default, not crash the container.
+    """
+    import importlib, os
+    saved = os.environ.get("MAX_ANALYSIS_RETRIES")
+    try:
+        os.environ["MAX_ANALYSIS_RETRIES"] = ""
+        importlib.reload(config)
+        assert config.MAX_ANALYSIS_RETRIES > 0
+        os.environ["PDF_READ_TIMEOUT_SEC"] = "  "
+        importlib.reload(config)
+        assert config.PDF_READ_TIMEOUT_SEC > 0
+    finally:
+        os.environ.pop("PDF_READ_TIMEOUT_SEC", None)
+        if saved is None:
+            os.environ.pop("MAX_ANALYSIS_RETRIES", None)
+        else:
+            os.environ["MAX_ANALYSIS_RETRIES"] = saved
+        importlib.reload(config)
+
+
 def test_the_polling_floor_leaves_room_inside_a_minute():
     """
     Sum of every unavoidable wait for a filing whose PDF is already there.

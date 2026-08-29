@@ -5,6 +5,7 @@ Anything that differs between dev and prod is an env var; anything that
 encodes the *formula itself* is a constant here so the scoring rules are
 reviewable in one screen rather than scattered across the worker.
 """
+import math
 import os
 
 from dotenv import load_dotenv
@@ -22,11 +23,16 @@ load_dotenv(override=True)
 
 
 def _int(name: str, default: int) -> int:
-    return int(os.getenv(name, str(default)))
+    # A blank value means "not set". Compose writes an empty string for an
+    # unset ${VAR}, and int("") raises - so without this, removing a variable
+    # from the environment crashes the container instead of taking the default.
+    raw = (os.getenv(name) or "").strip()
+    return int(raw) if raw else default
 
 
 def _float(name: str, default: float) -> float:
-    return float(os.getenv(name, str(default)))
+    raw = (os.getenv(name) or "").strip()
+    return float(raw) if raw else default
 
 
 def _bool(name: str, default: bool) -> bool:
@@ -349,12 +355,28 @@ BAND_MODERATE = _float("BAND_MODERATE", 24.0)
 POLL_INTERVAL_SEC = _int("POLL_INTERVAL_SEC", 5)
 BATCH_SIZE        = _int("BATCH_SIZE", 25)
 WORKER_THREADS    = _int("WORKER_THREADS", 4)
-# Retries are counted in CYCLES, so shortening the poll interval also shortened
-# the retry WINDOW - and BSE routinely lists a filing up to two minutes before
-# its PDF reaches the CDN. At 60s x 3 that window was 3 minutes; at 5s x 3 it
-# would have been 15 seconds, and those filings would have been thrown away.
-# 20 x 5s restores roughly the two minutes bse-scraper itself allows for.
-MAX_ANALYSIS_RETRIES = _int("MAX_ANALYSIS_RETRIES", 20)
+# How long we keep re-checking for a PDF the exchange has not published yet.
+#
+# Stated as SECONDS OF PATIENCE, with the retry count DERIVED from it, because
+# a hand-set count makes this window an emergent property of three separate
+# constants - and that has now caught us twice. Cutting the poll from 60s to 5s
+# silently took the window from 3 minutes to 15 seconds; a hand-fixed 20
+# retries put it back to only 1.7 minutes, still under the ~2 minutes BSE
+# routinely takes to get a PDF onto its CDN. A filing landing at 1m50s was
+# being thrown away.
+#
+# The asymmetry decides the value: a retry costs one indexed query and one fast
+# 404, and waiting longer risks nothing but a slightly later alert - while
+# giving up early loses the alert entirely.
+PDF_WAIT_BUDGET_SEC = _int("PDF_WAIT_BUDGET_SEC", 300)
+
+# Derived, not chosen. A retry costs about one poll interval when the CDN
+# answers quickly, which is the common case. Setting MAX_ANALYSIS_RETRIES
+# explicitly still overrides this.
+MAX_ANALYSIS_RETRIES = _int(
+    "MAX_ANALYSIS_RETRIES",
+    max(3, int(math.ceil(PDF_WAIT_BUDGET_SEC / float(max(POLL_INTERVAL_SEC, 1))))),
+)
 
 # Only look at filings from the last N days on a cold start, so the first run
 # doesn't try to analyse the entire back-catalogue at once.
