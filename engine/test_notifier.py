@@ -161,6 +161,85 @@ def test_a_send_failure_is_not_recorded_as_sent():
         _restore(m)
 
 
+def test_every_recipient_gets_the_alert():
+    m = []
+    try:
+        sender = _patch(m)
+        with enabled(WHATSAPP_RECIPIENTS=["919876543210", "919000000001"]):
+            assert notifier.run_once() == 2
+        assert sorted(to for to, _ in sender) == ["919000000001", "919876543210"]
+    finally:
+        _restore(m)
+
+
+def test_recipients_are_parsed_with_spaces_and_blanks():
+    """A pasted env var is rarely tidy: "91111, 91222," must give two numbers."""
+    import os
+    saved = os.environ.get("WHATSAPP_RECIPIENTS")
+    os.environ["WHATSAPP_RECIPIENTS"] = " 919876543210 , 919000000001 ,"
+    try:
+        import importlib
+        importlib.reload(config)
+        assert config.WHATSAPP_RECIPIENTS == ["919876543210", "919000000001"]
+    finally:
+        if saved is None:
+            os.environ.pop("WHATSAPP_RECIPIENTS", None)
+        else:
+            os.environ["WHATSAPP_RECIPIENTS"] = saved
+        import importlib
+        importlib.reload(config)
+
+
+def test_the_cap_and_the_dedup_are_per_recipient():
+    """
+    Adding a second number must not eat the first one's budget, and one
+    recipient being capped must not silence the other.
+    """
+    m = []
+    try:
+        saved = (whatsapp.send, db.fetch_unnotified_alerts,
+                 db.count_notified_today, db.mark_notified)
+        m.append(saved)
+        sender = Sent()
+        whatsapp.send = sender
+        # First number is at its cap; second has room.
+        db.count_notified_today = lambda p: 25 if p == "919876543210" else 0
+        db.fetch_unnotified_alerts = lambda p, s, a, limit=20: [ALERT][:limit]
+        db.mark_notified = lambda *a, **k: True
+        with enabled(WHATSAPP_RECIPIENTS=["919876543210", "919000000001"],
+                     WHATSAPP_MAX_PER_DAY=25):
+            assert notifier.run_once() == 1
+        assert [to for to, _ in sender] == ["919000000001"]
+    finally:
+        _restore(m)
+
+
+def test_one_recipient_failing_does_not_stop_the_others():
+    """A number that is blocked or invalid must not silence the rest."""
+    m = []
+    try:
+        saved = (whatsapp.send, db.fetch_unnotified_alerts,
+                 db.count_notified_today, db.mark_notified)
+        m.append(saved)
+        got = []
+
+        def flaky(to, text, template_params=None):
+            if to == "919876543210":
+                raise whatsapp.WhatsAppError(400, 131026, "not a test number")
+            got.append(to)
+            return "text", "wamid.OK"
+
+        whatsapp.send = flaky
+        db.count_notified_today = lambda p: 0
+        db.fetch_unnotified_alerts = lambda p, s, a, limit=20: [ALERT][:limit]
+        db.mark_notified = lambda *a, **k: True
+        with enabled(WHATSAPP_RECIPIENTS=["919876543210", "919000000001"]):
+            assert notifier.run_once() == 1
+        assert got == ["919000000001"]
+    finally:
+        _restore(m)
+
+
 def test_it_never_reads_a_subscriber_list():
     """
     The audience comes from config and nowhere else. This asserts the module

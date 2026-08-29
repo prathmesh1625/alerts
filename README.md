@@ -256,8 +256,20 @@ python notifier.py              # the loop the container runs
 ```
 
 To switch it on, set `ALERT_WHATSAPP_ENABLED=true`, `ALERT_WHATSAPP_TOKEN`,
-`ALERT_WHATSAPP_PHONE_NUMBER_ID` and `ALERT_WHATSAPP_RECIPIENTS`
-(comma-separated, `91XXXXXXXXXX`, no `+`). Message the number first — that opens
+`ALERT_WHATSAPP_PHONE_NUMBER_ID` and `ALERT_WHATSAPP_RECIPIENTS`.
+
+`ALERT_WHATSAPP_RECIPIENTS` is a comma-separated list — add a number to send to
+more people, no code change:
+
+```
+ALERT_WHATSAPP_RECIPIENTS=919876543210,919000000001
+```
+
+Full international form, **no `+`, no spaces, no dashes** (surrounding spaces and
+a trailing comma are tolerated). The daily cap and the sent/not-sent record are
+kept **per recipient**, so adding a number does not eat anyone else's budget,
+and a number that is blocked or mistyped does not silence the others. It does
+mean total message volume from the shared phone number rises with each one. Message the number first — that opens
 the 24-hour window, and until it is open every send goes out as a template.
 
 ## Size floor
