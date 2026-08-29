@@ -390,6 +390,89 @@ def test_sanitize_truncates_long_values():
     assert len(out) <= whatsapp.TEMPLATE_PARAM_MAX_LEN
 
 
+# -----------------------------------------------------------------------------
+#  Latency
+#
+#  Two WhatsApp messages arrived 4 and 7 minutes late. Neither was slow to
+#  send: the PDF download timeout was one 60s value paid in full on every
+#  retry, and 4 and 6 retries are 4.3 and 6.5 minutes.
+# -----------------------------------------------------------------------------
+
+def test_the_download_timeout_is_split_connect_and_read():
+    """
+    One number cannot serve both jobs. A single low timeout would abandon a
+    large PDF mid-transfer; a single high one is paid again on every retry.
+    requests applies the read half BETWEEN BYTES, so splitting them shortens
+    dead connections without truncating slow ones.
+    """
+    import pdf_fetch
+    captured = {}
+
+    class Resp:
+        status_code = 404
+        headers = {}
+        text = ""
+
+    def fake_get(url, **kw):
+        captured["timeout"] = kw.get("timeout")
+        return Resp()
+
+    saved = pdf_fetch.requests.get
+    pdf_fetch.requests.get = fake_get
+    try:
+        pdf_fetch.download("https://example.invalid/nope.pdf")
+    finally:
+        pdf_fetch.requests.get = saved
+
+    t = captured["timeout"]
+    assert isinstance(t, tuple) and len(t) == 2, t
+    connect, read = t
+    assert 0 < connect <= 10, "connect timeout should be short"
+    assert 0 < read <= 30, "a 60s read timeout is paid again on every retry"
+
+
+def test_a_retry_storm_stays_under_three_minutes():
+    """
+    The bound that was actually breached. With MAX_ANALYSIS_RETRIES cycles at
+    the configured timeouts, a PDF the exchange has not published must not be
+    able to push delivery past a few minutes.
+    """
+    per_attempt = (config.PDF_CONNECT_TIMEOUT_SEC
+                   + config.PDF_DOWNLOAD_TIMEOUT_SEC
+                   + config.POLL_INTERVAL_SEC)
+    assert per_attempt * 6 < 180, \
+        "6 retries costs {:.0f}s - the 7-minute regression is back".format(
+            per_attempt * 6)
+
+
+def test_the_polling_floor_leaves_room_inside_a_minute():
+    """
+    Sum of every unavoidable wait for a filing whose PDF is already there.
+    These are averages: each poll costs half its interval on average.
+    """
+    floor = (config.SCRAPE_INTERVAL_SEC / 2
+             + config.POLL_INTERVAL_SEC / 2
+             + config.WHATSAPP_POLL_SEC / 2)
+    assert floor < 30, "polling alone eats {:.0f}s of the 60s budget".format(floor)
+
+
+def test_the_log_line_splits_analysis_from_queue():
+    """A slow message must say WHICH half was slow, not just that it was."""
+    import datetime
+    scored = datetime.datetime.now()
+    alert = dict(ALERT, announced_at=scored - datetime.timedelta(seconds=90),
+                 created_at=scored)
+    note = notifier.latency_note(alert)
+    assert "analysis" in note and "queue" in note, note
+    assert "90s" in note or "89s" in note or "91s" in note, note
+
+
+def test_latency_note_is_silent_when_it_cannot_tell():
+    """Missing timestamps must not crash a send or invent a number."""
+    assert notifier.latency_note({"announced_at": None, "created_at": None}) == ""
+    assert notifier.latency_note({}) == ""
+
+
 if __name__ == "__main__":
     passed = failed = 0
     for name, fn in sorted(globals().items()):

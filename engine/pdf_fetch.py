@@ -63,7 +63,12 @@ def download(pdf_url, timeout=None):
     if os.path.isfile(dest) and os.path.getsize(dest) > 0:
         return dest
 
-    timeout = timeout or config.PDF_DOWNLOAD_TIMEOUT_SEC
+    # (connect, read). The read half applies BETWEEN BYTES, so a large PDF
+    # arriving steadily is never cut off — only a connection that has stopped
+    # saying anything, which is what an unpublished filing on the BSE CDN looks
+    # like. A single long timeout here is paid again on every retry.
+    if timeout is None:
+        timeout = (config.PDF_CONNECT_TIMEOUT_SEC, config.PDF_DOWNLOAD_TIMEOUT_SEC)
     try:
         r = requests.get(
             pdf_url,

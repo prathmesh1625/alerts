@@ -97,7 +97,21 @@ SCRAPE_INTERVAL_SEC = _int("SCRAPE_INTERVAL_SEC", 20)
 # pruned by age, because a filing's verdict lives in the database once analysed.
 PDF_CACHE_DIR   = os.getenv("PDF_CACHE_DIR", "/tmp/alert_pdf_cache")
 PDF_CACHE_HOURS = _int("PDF_CACHE_HOURS", 48)
-PDF_DOWNLOAD_TIMEOUT_SEC = _int("PDF_DOWNLOAD_TIMEOUT_SEC", 60)
+# Split into connect and read, because one number cannot serve both jobs here.
+#
+# BSE lists a filing before its PDF reaches the CDN. When the CDN answers 404
+# that costs nothing, but when it HANGS the old single 60s timeout was paid in
+# full on every retry — 4 retries is 4.3 minutes, 6 is 6.5, which is exactly
+# the delay seen on WhatsApp.
+#
+# requests applies the read timeout BETWEEN BYTES, not to the whole transfer,
+# so a large PDF streaming steadily is unaffected by a low value here. This
+# shortens dead connections only.
+PDF_CONNECT_TIMEOUT_SEC = _float("PDF_CONNECT_TIMEOUT_SEC", 5.0)
+PDF_READ_TIMEOUT_SEC = _float("PDF_READ_TIMEOUT_SEC", 15.0)
+# Kept so an existing override still means something: if set, it becomes the
+# read timeout.
+PDF_DOWNLOAD_TIMEOUT_SEC = _float("PDF_DOWNLOAD_TIMEOUT_SEC", PDF_READ_TIMEOUT_SEC)
 # Refuse absurdly large attachments rather than filling the disk with one file.
 PDF_MAX_BYTES = _int("PDF_MAX_BYTES", 60 * 1024 * 1024)
 
@@ -423,8 +437,11 @@ WHATSAPP_MAX_PER_DAY = _int("WHATSAPP_MAX_PER_DAY", 25)
 # database does not replay history to someone's phone.
 WHATSAPP_MAX_AGE_MIN = _int("WHATSAPP_MAX_AGE_MIN", 180)
 
-# How often the notifier looks for alerts it has not sent yet.
-WHATSAPP_POLL_SEC = _int("WHATSAPP_POLL_SEC", 20)
+# How often the notifier looks for alerts it has not sent yet. One indexed
+# query against a local database, so this costs essentially nothing and is
+# pure end-to-end latency - it was the single largest avoidable delay between
+# an alert being scored and the message arriving.
+WHATSAPP_POLL_SEC = _int("WHATSAPP_POLL_SEC", 5)
 
 # Public base for the PDF link in a message. The API serves the filing at
 # /api/alerts/{id}/pdf, so this is the dashboard's own origin.

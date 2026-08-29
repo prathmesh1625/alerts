@@ -151,9 +151,38 @@ def deliver_one(phone: str, alert: dict, dry_run: bool = False) -> bool:
     # Recorded only AFTER the API confirms, so a failure is retried rather
     # than marked delivered.
     db.mark_notified(phone, alert["announcement_id"], channel, wamid)
-    print("[notifier] sent {} to {} via {} ({})".format(
-        alert.get("company_symbol"), phone, channel, wamid or "no id"), flush=True)
+    print("[notifier] sent {} to {} via {} ({}){}".format(
+        alert.get("company_symbol"), phone, channel, wamid or "no id",
+        latency_note(alert)), flush=True)
     return True
+
+
+def latency_note(alert: dict) -> str:
+    """
+    Where this message's time went, split at the only boundary that matters.
+
+    "analysis" is everything upstream of us — the scraper noticing the filing,
+    the PDF download and its retries, extraction, the model. "queue" is the
+    notifier's own poll. Printing both means the next slow message says which
+    half was responsible instead of leaving it to be inferred.
+    """
+    import datetime
+
+    announced = alert.get("announced_at")
+    scored = alert.get("created_at")
+    if not (hasattr(announced, "timestamp") and hasattr(scored, "timestamp")):
+        return ""
+    now = datetime.datetime.now(scored.tzinfo) if scored.tzinfo else \
+        datetime.datetime.now()
+    # announced_at is naive IST; created_at is tz-aware. Compare each against
+    # its own clock rather than subtracting one from the other.
+    try:
+        queue = (now - scored).total_seconds()
+        analysis = (scored.replace(tzinfo=None) - announced).total_seconds()
+    except Exception:
+        return ""
+    return "  [analysis {:.0f}s + queue {:.0f}s = {:.0f}s]".format(
+        analysis, queue, analysis + queue)
 
 
 def run_once(dry_run: bool = False) -> int:

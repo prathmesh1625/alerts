@@ -665,6 +665,64 @@ def count_notified_today(phone: str) -> int:
         return int(cur.fetchone()["n"])
 
 
+def fetch_latency(days: int = 2, limit: int = 100) -> dict:
+    """
+    Where end-to-end time actually goes, from timestamps already recorded.
+
+    Three clocks per alert: the exchange's own `announced_at`, `created_at`
+    when the formula settled it, and `sent_at` when WhatsApp accepted it. The
+    two gaps separate work we control from queueing we control differently,
+    which is the split you need before tuning anything.
+    """
+    sql = """
+        SELECT a.company_symbol,
+               a.announced_at,
+               a.created_at,
+               n.sent_at,
+               n.channel,
+               EXTRACT(EPOCH FROM (a.created_at AT TIME ZONE 'Asia/Kolkata'
+                                   - a.announced_at))          AS analysis_sec,
+               EXTRACT(EPOCH FROM (n.sent_at - a.created_at))   AS queue_sec
+          FROM stock_alerts a
+          JOIN notified_alerts n ON n.announcement_id = a.announcement_id
+         WHERE a.created_at >= NOW() - (%s * INTERVAL '1 day')
+      ORDER BY a.created_at DESC
+         LIMIT %s
+    """
+    with get_cursor() as cur:
+        cur.execute(sql, (days, limit))
+        rows = [dict(r) for r in cur.fetchall()]
+
+    def pct(values, p):
+        if not values:
+            return None
+        s = sorted(values)
+        return round(s[min(int(len(s) * p / 100.0), len(s) - 1)], 1)
+
+    analysis = [float(r["analysis_sec"]) for r in rows if r["analysis_sec"] is not None]
+    queue = [float(r["queue_sec"]) for r in rows if r["queue_sec"] is not None]
+    total = [a + q for a, q in zip(analysis, queue)]
+
+    return {
+        "sampled": len(rows),
+        "analysis_sec": {"p50": pct(analysis, 50), "p90": pct(analysis, 90),
+                         "max": round(max(analysis), 1) if analysis else None},
+        "queue_sec": {"p50": pct(queue, 50), "p90": pct(queue, 90),
+                      "max": round(max(queue), 1) if queue else None},
+        "total_sec": {"p50": pct(total, 50), "p90": pct(total, 90),
+                      "max": round(max(total), 1) if total else None},
+        "slowest": sorted(
+            [{"symbol": r["company_symbol"],
+              "analysis_sec": round(float(r["analysis_sec"]), 1)
+              if r["analysis_sec"] is not None else None,
+              "queue_sec": round(float(r["queue_sec"]), 1)
+              if r["queue_sec"] is not None else None,
+              "channel": r["channel"]}
+             for r in rows if r["analysis_sec"] is not None],
+            key=lambda x: -(x["analysis_sec"] + (x["queue_sec"] or 0)))[:10],
+    }
+
+
 def mark_notified(phone: str, announcement_id: int, channel: str,
                   wamid: str = "") -> bool:
     """

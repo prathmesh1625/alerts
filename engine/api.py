@@ -319,6 +319,21 @@ def get_filing_pdf(announcement_id: int):
     return FileResponse(path, media_type="application/pdf", filename=nice)
 
 
+@app.get("/api/latency")
+def get_latency(days: int = Query(default=2, ge=1, le=30),
+                limit: int = Query(default=100, ge=1, le=1000)):
+    """
+    End-to-end delivery time, split into the two halves that behave differently.
+
+    `analysis_sec` is everything upstream of delivery — the scraper noticing
+    the filing, the PDF download and any retries for a PDF the exchange has
+    not published yet, extraction, the model. `queue_sec` is the notifier's own
+    poll. A slow message is one or the other, and they are fixed differently,
+    so the split is the whole point of this endpoint.
+    """
+    return _db_call(db.fetch_latency, days, limit)
+
+
 @app.get("/api/alerts/{announcement_id}/pdf")
 def get_pdf(announcement_id: int):
     """Kept for the alert cards; same behaviour as the filings endpoint."""
