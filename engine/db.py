@@ -630,6 +630,16 @@ def fetch_unnotified_alerts(phone: str, min_score: float, max_age_min: int,
     someone's phone in one burst — and the first thing that phone number does
     is get reported.
 
+    BOTH clocks are bounded, because they guard different accidents:
+
+      * `created_at` — recently SCORED. Stops a populated database replaying
+        its history the moment delivery is switched on.
+      * `announced_at` — recently PUBLISHED. Stops old NEWS being sent as if
+        it were fresh. This is the one that matters when the engine
+        backfills: a filing from yesterday scored just now has a `created_at`
+        of a few seconds ago and would otherwise sail through, arriving as a
+        WhatsApp message about a day-old order.
+
     Oldest first so a batch arrives in the order the market produced it.
     """
     sql = """
@@ -640,11 +650,13 @@ def fetch_unnotified_alerts(phone: str, min_score: float, max_age_min: int,
          WHERE n.announcement_id IS NULL
            AND a.score >= %s
            AND a.created_at >= NOW() - (%s * INTERVAL '1 minute')
+           AND a.announced_at >= (timezone('Asia/Kolkata', now())
+                                  - (%s * INTERVAL '1 minute'))
       ORDER BY a.announced_at ASC, a.id ASC
          LIMIT %s
     """
     with get_cursor() as cur:
-        cur.execute(sql, (phone, min_score, max_age_min, limit))
+        cur.execute(sql, (phone, min_score, max_age_min, max_age_min, limit))
         return [dict(r) for r in cur.fetchall()]
 
 

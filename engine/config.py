@@ -99,6 +99,21 @@ BSE_FEED_PAGES = _int("BSE_FEED_PAGES", 2)
 # first number to raise.
 SCRAPE_INTERVAL_SEC = _int("SCRAPE_INTERVAL_SEC", 20)
 
+# How often to sweep NSE's WHOLE day by date range, rather than just reading
+# the newest filings.
+#
+# NSE's `pageNo` parameter is accepted and then ignored - pages 1 to 4 all
+# return the same newest 20 rows - so the plain feed can never see past the
+# 20 most recent filings. On a quiet Sunday that is the entire day; on a
+# results day NSE publishes hundreds, and anything landing beyond those 20
+# between two polls was lost permanently, because nothing looked back.
+#
+# The sweep is the completeness guarantee and the plain feed is the latency
+# one, which is why both run. Sweeping every cycle would mean pulling the
+# full day - several hundred rows - every 20 seconds, for filings we already
+# have.
+NSE_SWEEP_INTERVAL_SEC = _int("NSE_SWEEP_INTERVAL_SEC", 300)
+
 # Where on-demand PDF downloads are cached. A working set, not an archive:
 # pruned by age, because a filing's verdict lives in the database once analysed.
 PDF_CACHE_DIR   = os.getenv("PDF_CACHE_DIR", "/tmp/alert_pdf_cache")

@@ -240,6 +240,23 @@ def test_one_recipient_failing_does_not_stop_the_others():
         _restore(m)
 
 
+def test_old_news_is_bounded_by_when_it_was_ANNOUNCED():
+    """
+    The guard that matters now the engine sweeps NSE's whole day.
+
+    A filing published yesterday but scored just now has a `created_at` of
+    seconds ago, so a created_at bound alone lets it through — and it arrives
+    as a WhatsApp message about a day-old order. The query must bound
+    announced_at too. Asserted against the SQL because the behaviour lives
+    there, not in Python.
+    """
+    import inspect
+    sql = inspect.getsource(db.fetch_unnotified_alerts)
+    assert "a.created_at >=" in sql, "lost the scored-recently bound"
+    assert "a.announced_at >=" in sql, \
+        "backfilled filings will be sent as if they were fresh news"
+
+
 def test_it_never_reads_a_subscriber_list():
     """
     The audience comes from config and nowhere else. This asserts the module

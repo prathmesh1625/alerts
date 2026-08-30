@@ -11,7 +11,8 @@
 #  production. It is kept small on purpose:
 #
 #      production scraper   feed every 20s, 3 pages, downloads EVERY PDF
-#      this scraper         feed every 180s, 2 pages, downloads NOTHING
+#      this scraper         feed every 20s, plus one full-day sweep every 5
+#                           minutes, and downloads NOTHING
 #
 #  The agent downloads only the ~12% of filings that survive the title screen
 #  and the prefilter. That is roughly a thirteenth of the feed traffic, which
@@ -69,7 +70,14 @@ services:
       # NSE demonstrably tolerates - but it does roughly double the feed
       # traffic from this server. Raise this first if NSE throttles.
       - SCRAPE_INTERVAL_SEC=${ALERT_SCRAPE_INTERVAL_SEC:-20}
-      - NSE_FEED_PAGES=${ALERT_NSE_FEED_PAGES:-2}
+      # NSE ignores pageNo - every page returns the same newest 20 rows - so
+      # this cannot reach past them. The full day comes from the date-range
+      # sweep below; this is kept only for the plain feed's single call.
+      - NSE_FEED_PAGES=${ALERT_NSE_FEED_PAGES:-1}
+      # How often to sweep NSE's whole day. This is the completeness
+      # guarantee: without it the engine sees only the newest 20 filings and
+      # anything beyond them between polls is lost for good.
+      - NSE_SWEEP_INTERVAL_SEC=${ALERT_NSE_SWEEP_INTERVAL_SEC:-300}
       - BSE_FEED_PAGES=${ALERT_BSE_FEED_PAGES:-2}
       # Unused by this process, but config.py reads it at import.
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
@@ -163,8 +171,6 @@ services:
       - WORKER_THREADS=${ALERT_WORKER_THREADS:-2}
       - BATCH_SIZE=${ALERT_BATCH_SIZE:-10}
       - POLL_INTERVAL_SEC=${ALERT_POLL_INTERVAL_SEC:-5}
-      # Retries count in CYCLES, and BSE lists filings up to two minutes
-      # before the PDF is fetchable. 20 x 5s restores that window.
       # How long to keep re-checking for a PDF the exchange has not published
       # yet. The retry COUNT is derived from this in config.py - pinning the
       # count instead is what silently shrank this window twice.

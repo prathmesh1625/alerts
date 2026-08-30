@@ -16,7 +16,7 @@ import json
 import os
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import requests
 
@@ -122,30 +122,109 @@ def _clean(v):
     return str(v or "").strip()
 
 
+def _nse_day(from_date, to_date):
+    """
+    NSE's feed for an explicit date range. [] on any failure.
+
+    This is the only way to see a whole day. `pageNo` is accepted by the API
+    and then IGNORED - pages 1, 2, 3 and 4 all return the same newest 20 rows -
+    so paging cannot reach past the most recent 20 filings, while this returns
+    809 across three days.
+    """
+    sess = _nse.ensure()
+    headers = {"Accept": "application/json, text/plain, */*", "Referer": NSE_REFERER}
+    params = {"index": "equities",
+              "from_date": from_date.strftime("%d-%m-%Y"),
+              "to_date": to_date.strftime("%d-%m-%Y")}
+
+    for attempt in (1, 2):
+        try:
+            r = sess.get(NSE_API, params=params, headers=headers, timeout=25)
+        except Exception as e:
+            _log("NSE day query failed: {}".format(e))
+            return []
+        if r.status_code in (401, 403) and attempt == 1:
+            _nse.refresh()
+            sess = _nse.ensure()
+            continue
+        if r.status_code != 200:
+            _log("NSE day query: status {}".format(r.status_code))
+            return []
+        try:
+            data = r.json()
+        except Exception:
+            _log("NSE day query: non-JSON body (challenge page?)")
+            return []
+        return data if isinstance(data, list) else []
+    return []
+
+
+def _nse_rows(items):
+    out = []
+    for item in items:
+        symbol = _clean(item.get("symbol")).upper()
+        pdf_url = _clean(item.get("attchmntFile"))
+        if not symbol or not pdf_url:
+            continue
+        out.append({
+            "company_symbol": symbol,
+            "company_name": _clean(item.get("sm_name")) or symbol,
+            "title": _clean(item.get("desc")),
+            "pdf_url": pdf_url,
+            "announced_at": _parse_dt(item.get("sort_date") or item.get("an_dt")),
+            "exchange": "NSE",
+        })
+    return out
+
+
+# When the last full-day sweep ran. 0.0 means "never", so a restart sweeps
+# immediately and catches up on anything missed while it was down.
+_last_sweep = 0.0
+
+
 def fetch_nse(pages=None):
     """
-    Recent NSE filings across ALL companies, newest first.
+    Recent NSE filings across ALL companies.
+
+    Two queries with different jobs, because one cannot do both:
+
+      * every cycle, the plain feed - the newest 20 filings. Small and fast,
+        and what keeps end-to-end latency at the poll interval.
+      * every NSE_SWEEP_INTERVAL_SEC, the whole day by date range. This is the
+        completeness guarantee: the plain feed shows only the latest 20, so
+        anything beyond that between two polls - a results-day burst, or any
+        gap while this process was restarting - was previously lost for good,
+        because nothing ever looked back.
 
     Field names are NSE's own: `symbol`, `desc` (the subject line),
     `attchmntFile` (the PDF), `sort_date`.
     """
-    pages = pages or config.NSE_FEED_PAGES
-    out = []
-    for page in range(1, pages + 1):
-        for item in _nse_page(page):
-            symbol = _clean(item.get("symbol")).upper()
-            pdf_url = _clean(item.get("attchmntFile"))
-            if not symbol or not pdf_url:
-                continue
-            out.append({
-                "company_symbol": symbol,
-                "company_name": _clean(item.get("sm_name")) or symbol,
-                "title": _clean(item.get("desc")),
-                "pdf_url": pdf_url,
-                "announced_at": _parse_dt(item.get("sort_date") or item.get("an_dt")),
-                "exchange": "NSE",
-            })
-    return out
+    global _last_sweep
+
+    items = _nse_page(1)
+
+    now = time.monotonic()
+    if now - _last_sweep >= config.NSE_SWEEP_INTERVAL_SEC:
+        today = datetime.now()
+        # Yesterday too, so a filing published just before midnight is still
+        # swept if this process was down across the rollover.
+        got = _nse_day(today - timedelta(days=1), today)
+        if got:
+            _last_sweep = now
+            _log("NSE sweep: {} filing(s) across today and yesterday".format(len(got)))
+            items = items + got
+        else:
+            _log("NSE sweep failed - retrying next cycle, plain feed still live")
+
+    # The two queries overlap heavily; the scraper dedups on pdf_url anyway,
+    # but doing it here keeps the log counts honest.
+    seen, rows = set(), []
+    for r in _nse_rows(items):
+        if r["pdf_url"] in seen:
+            continue
+        seen.add(r["pdf_url"])
+        rows.append(r)
+    return rows
 
 
 # -----------------------------------------------------------------------------
