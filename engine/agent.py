@@ -360,6 +360,56 @@ def rescore_one(row: dict) -> str:
         row.get("score"))
 
 
+def withdraw_stale_alerts() -> int:
+    """
+    Retract alerts the corrected formula no longer stands behind.
+
+    Deliberately narrow. It acts only on filings whose stamp is stale, only
+    when the re-scored verdict does not qualify, and only when the PDF can be
+    re-read — the same evidence bar as recovery. Everything it removes is
+    logged with what the alert used to say, because a disappearing alert with
+    no explanation is worse than a wrong one.
+    """
+    version = scoring.formula_version()
+    try:
+        rows = db.fetch_stale_alerts(version, config.RESCORE_DAYS,
+                                     config.RESCORE_BATCH)
+    except Exception as e:
+        print("[agent] stale-alert query failed: {}".format(e), file=sys.stderr)
+        return 0
+
+    withdrawn = 0
+    for row in rows:
+        ann_id = row["announcement_id"]
+        try:
+            signals = FilingSignals(**(row.get("raw_signals") or {}))
+        except Exception:
+            db.stamp_formula_version(ann_id, version)
+            continue
+
+        path = (resolve_pdf_path(row.get("local_path"))
+                or pdf_fetch.download(row.get("pdf_url")))
+        if not path:
+            continue
+        try:
+            text = pdf_text.extract_text_from_pdf_file(path)
+        except Exception:
+            continue
+
+        result = scoring.score_filing(signals, text, row.get("title") or "")
+        db.stamp_formula_version(ann_id, version)
+        if result["qualifies"]:
+            continue
+
+        if db.withdraw_alert(ann_id):
+            withdrawn += 1
+            print("[agent] {} WITHDRAWN - no longer qualifies under the current "
+                  "formula (was {:.1f}: {})".format(
+                      row["company_symbol"], float(row["alert_score"] or 0),
+                      row.get("headline")), flush=True)
+    return withdrawn
+
+
 def rescore_cycle() -> int:
     """
     Re-judge filings whose verdict predates the current formula.
@@ -390,6 +440,10 @@ def rescore_cycle() -> int:
             print("[agent] {}".format(line), flush=True)
             if "RECOVERED" in line:
                 recovered += 1
+
+    # Both directions, same cycle: a rule fix that only ever adds alerts leaves
+    # the ones it got wrong sitting on the dashboard.
+    recovered += withdraw_stale_alerts()
     return recovered
 
 

@@ -370,6 +370,17 @@ _NOT_AN_ORDER_RE = re.compile(
     r"cash credit|overdraft|letter of credit|bank guarantee|"
     r"borrowing|sanction(?:ed|ing)? (?:of )?(?:a |the )?(?:loan|limit|facilit)|"
     r"loan (?:agreement|facility|sanction|from)|"
+    # M&A and equity transactions. A share sale is quoted in crore, names a
+    # counterparty and reads like a deal, but no business has been won: the
+    # promoters of HAPPSTMNDS sold 22.106% of the company to ITC Infotech for
+    # an "aggregate consideration" of Rs 1,329.72 Cr and it alerted as an order
+    # win. For shareholders that is a change of control, not new revenue.
+    r"aggregate consideration|share purchase agreement|share subscription|"
+    r"paid-?up (?:equity )?share capital|"
+    r"(?:sale|purchase|transfer) of .{0,60}(?:equity|shares|stake)|"
+    r"stake sale|slump sale|business transfer|open offer|"
+    r"divest(?:ment|iture|ing)?|disinvest|change (?:in|of) control|"
+    r"acquisition of .{0,60}(?:stake|shares|equity|company|business)|"
     # Shareholder approvals. An AGM notice asks members to authorise a CEILING
     # for related-party dealings, and the resolution reads like an order: a
     # counterparty, a scope, a value in crore. ASAHIINDIA's annual report was
@@ -546,7 +557,13 @@ def is_real_order(order: OrderWin, doc_type: str = "", title: str = "") -> bool:
 
     if blob.strip() and _IS_AN_ORDER_RE.search(blob):
         return True
-    if (doc_type or "").strip().upper() in ("ORDER_WIN", "BOTH"):
+    # ORDER_WIN only, deliberately NOT "BOTH". BOTH is the label the model
+    # reaches for when a document has figures in it and something else going
+    # on, which is most of the ones that get misread: HAPPSTMNDS' share sale
+    # came through as BOTH and this clause alone turned it into a Rs 1,330 Cr
+    # order win. A filing that genuinely reports results AND an order says so
+    # in words, so it still passes on the whitelist or the exchange's title.
+    if (doc_type or "").strip().upper() == "ORDER_WIN":
         return True
     if title and _ORDER_WIN_TITLE_RE.search(title):
         return True

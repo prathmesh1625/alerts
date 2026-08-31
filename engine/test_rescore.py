@@ -11,6 +11,7 @@ No database and no network.
 Run: pytest test_rescore.py   or   python test_rescore.py
 """
 import config
+import db
 import scoring
 import signals as S
 
@@ -156,6 +157,81 @@ def test_a_termination_still_needs_the_document_to_be_re_read():
     text = ("Subject: Termination of work order. The Company has received a "
             "communication regarding termination of the aforesaid work order.")
     assert scoring.score_filing(sig, text, E2E_TITLE)["rules_hit"] == []
+
+
+# -----------------------------------------------------------------------------
+#  Withdrawal — the other direction
+#
+#  HAPPSTMNDS' promoter share sale alerted as a Rs 1,330 Cr order win.
+#  Correcting the rule fixed future filings but left the wrong alert on the
+#  dashboard, because re-scoring could only ever ADD one.
+# -----------------------------------------------------------------------------
+
+SPA_SIGNALS = {
+    "company_name": "Happiest Minds Technologies Ltd",
+    "document_type": "BOTH",
+    "orders": [{
+        "raw_value": 1329.72, "unit": "crore", "status": "NEW",
+        "customer": "ITC Infotech India Limited",
+        "scope": "sale of equity shares to ITC Infotech India Limited",
+        "quote": ("for sale of 3,36,61,700 equity shares of Happiest Minds "
+                  "Technologies Limited held by them, representing 22.106% of "
+                  "the paid-up equity share capital of the Company, to the "
+                  "Purchaser for an aggregate consideration of INR "
+                  "13,29,71,77,710"),
+    }],
+}
+
+
+def test_the_share_sale_no_longer_qualifies():
+    sig = S.FilingSignals(**SPA_SIGNALS)
+    r = scoring.score_filing(sig, "", "Board Meeting Outcome")
+    assert r["rules_hit"] == [], r["breakdown"]["rules"][-1]["note"]
+    assert r["qualifies"] is False
+
+
+def test_a_corrected_rule_can_withdraw_an_alert():
+    """
+    A rule fix has to work in both directions, or the dashboard keeps showing
+    something the formula no longer stands behind.
+    """
+    import inspect
+    import agent
+    assert hasattr(agent, "withdraw_stale_alerts")
+    src = inspect.getsource(agent.withdraw_stale_alerts)
+    assert "withdraw_alert" in src
+    # Same evidence bar as recovery: stale stamp, re-read PDF, still not
+    # qualifying. Never on a guess.
+    assert 'result["qualifies"]' in src
+    assert "extract_text_from_pdf_file" in src
+    assert "fetch_stale_alerts" in src
+
+
+def test_withdrawal_is_logged_with_what_it_removed():
+    """A card that vanishes with no explanation is worse than a wrong one."""
+    import inspect
+    import agent
+    src = inspect.getsource(agent.withdraw_stale_alerts)
+    assert "WITHDRAWN" in src
+    assert "headline" in src
+
+
+def test_withdrawal_leaves_the_filing_record_intact():
+    """
+    Only the dashboard card goes. The filings browser must still show that the
+    filing was seen and what was made of it.
+    """
+    import inspect
+    src = inspect.getsource(db.withdraw_alert)
+    # The statements only — the docstring is free to mention the ledger, and
+    # matching prose rather than SQL is how this test failed first time round.
+    statements = [ln.strip().lower() for ln in src.splitlines()
+                  if "delete" in ln.lower() or "update" in ln.lower()
+                  or "insert" in ln.lower()]
+    assert statements, "no write statement found"
+    assert all("stock_alerts" in st for st in statements), statements
+    assert not any("filing_analyses" in st for st in statements), \
+        "withdrawal must not erase the ledger"
 
 
 def test_rescore_runs_only_when_nothing_new_is_waiting():

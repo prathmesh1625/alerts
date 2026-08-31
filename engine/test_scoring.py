@@ -455,6 +455,87 @@ def test_the_verdict_does_not_depend_on_which_sentence_was_quoted():
     assert a["score"] == b["score"], (a["score"], b["score"])
 
 
+# -----------------------------------------------------------------------------
+#  A share sale is not an order win
+#
+#  HAPPSTMNDS' promoters sold 22.106% of the company to ITC Infotech for an
+#  "aggregate consideration" of Rs 1,329.72 Cr, and it alerted STRONG as an
+#  order win. No business was won — for a shareholder that is a change of
+#  control. It got through because the model labelled the document BOTH, and
+#  BOTH had just been made sufficient evidence on its own.
+# -----------------------------------------------------------------------------
+
+SPA_QUOTE = ("for sale of 3,36,61,700 equity shares of Happiest Minds "
+             "Technologies Limited held by them, representing 22.106% of the "
+             "paid-up equity share capital of the Company, to the Purchaser for "
+             "an aggregate consideration of INR 13,29,71,77,710")
+
+
+def spa_order():
+    return OrderWin(raw_value=1329.72, unit="crore",
+                    customer="ITC Infotech India Limited",
+                    scope="sale of equity shares to ITC Infotech India Limited",
+                    quote=SPA_QUOTE)
+
+
+def test_a_promoter_share_sale_is_not_an_order_win():
+    r = scoring.score_filing(results(document_type="BOTH", orders=[spa_order()]))
+    assert r["rules_hit"] == [], r["breakdown"]["rules"][-1]["note"]
+    assert r["order_value_cr"] is None
+    assert r["qualifies"] is False
+
+
+def test_a_share_sale_is_rejected_under_every_favourable_label():
+    """It must not depend on which label the model happened to choose."""
+    for dt in ("BOTH", "ORDER_WIN", "OTHER"):
+        r = scoring.score_filing(results(document_type=dt, orders=[spa_order()]),
+                                 "", "Bagging/Receiving of orders/contracts")
+        assert r["rules_hit"] == [], "{}: {}".format(
+            dt, r["breakdown"]["rules"][-1]["note"])
+
+
+def test_BOTH_is_not_positive_evidence_on_its_own():
+    """
+    BOTH is what the model reaches for when a document has figures and
+    something else going on, which describes most of the misreads. An order
+    with no order language in it must not qualify on that label alone.
+    """
+    vague = OrderWin(raw_value=500.0, unit="crore", customer="Someone",
+                     scope="the arrangement", quote="the value is Rs 500 crore")
+    assert scoring.score_filing(
+        results(document_type="BOTH", orders=[vague]))["rules_hit"] == []
+    # ORDER_WIN still is, which is what recovered E2E Networks.
+    assert "ORDER_WIN" in scoring.score_filing(
+        results(document_type="ORDER_WIN", orders=[vague]))["rules_hit"]
+
+
+def test_a_genuine_order_in_a_results_filing_still_fires():
+    """
+    The cost of dropping BOTH. A filing that really is results AND an order win
+    says so in words, so the whitelist carries it — this checks that it does.
+    """
+    real = OrderWin(raw_value=412.5, unit="crore", customer="NTPC Limited",
+                    scope="supply and installation of equipment",
+                    quote="the Company has received a work order of Rs. 412.50 crore")
+    r = scoring.score_filing(results(document_type="BOTH", orders=[real]))
+    assert "ORDER_WIN" in r["rules_hit"], r["breakdown"]["rules"][-1]["note"]
+
+
+def test_ma_language_does_not_block_an_ordinary_order():
+    """
+    The counterpart risk: the M&A terms must not catch orders that mention a
+    transfer or a sale in passing.
+    """
+    for quote in (
+        "received a purchase order for the supply of 500 units",
+        "work order for transfer of material handling equipment to the site",
+        "letter of award for the sale and installation of solar modules",
+    ):
+        o = OrderWin(raw_value=250.0, unit="crore", scope="supply", quote=quote)
+        r = scoring.score_filing(results(document_type="ORDER_WIN", orders=[o]))
+        assert "ORDER_WIN" in r["rules_hit"], quote
+
+
 def test_the_wider_evidence_cannot_override_the_blacklist():
     """
     The safety property. Widening what counts as positive evidence must not

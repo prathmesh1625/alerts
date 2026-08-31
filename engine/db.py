@@ -612,6 +612,56 @@ def fetch_stale_analyses(current_version: str, days: int, limit: int) -> list:
         return [dict(r) for r in cur.fetchall()]
 
 
+def fetch_stale_alerts(current_version: str, days: int, limit: int) -> list:
+    """
+    EXISTING alerts whose filing was judged under a formula that has changed.
+
+    The mirror of fetch_stale_analyses. A rule fix has to work in both
+    directions: HAPPSTMNDS' promoter share sale alerted as a Rs 1,330 Cr order
+    win, and correcting the rule left the wrong alert sitting on the dashboard
+    because re-scoring could only ever ADD one.
+    """
+    sql = """
+        SELECT f.announcement_id, f.company_symbol, f.raw_signals,
+               s.score AS alert_score, s.headline,
+               a.{col_title} AS title,
+               a.{col_url}   AS pdf_url,
+               a.{col_path}  AS local_path
+          FROM filing_analyses f
+          JOIN stock_alerts s ON s.announcement_id = f.announcement_id
+          JOIN {table} a ON a.{col_id} = f.announcement_id
+         WHERE f.raw_signals IS NOT NULL
+           AND (f.formula_version IS DISTINCT FROM %s)
+           AND a.{col_time} >= (timezone('Asia/Kolkata', now())::date
+                                - ((%s - 1) * INTERVAL '1 day'))
+      ORDER BY a.{col_time} DESC
+         LIMIT %s
+    """.format(
+        table=config.FILINGS_TABLE,
+        col_id=config.COL_ID,
+        col_title=config.COL_TITLE,
+        col_url=config.COL_PDF_URL,
+        col_path=config.COL_FILE_PATH,
+        col_time=config.COL_ANNOUNCED_AT,
+    )
+    with get_cursor() as cur:
+        cur.execute(sql, (current_version, days, limit))
+        return [dict(r) for r in cur.fetchall()]
+
+
+def withdraw_alert(announcement_id: int) -> bool:
+    """
+    Remove an alert the formula no longer stands behind.
+
+    The filing_analyses row is left in place, so the filings browser still shows
+    the filing and what was made of it — only the dashboard card goes.
+    """
+    with get_cursor() as cur:
+        cur.execute("DELETE FROM stock_alerts WHERE announcement_id = %s",
+                    (announcement_id,))
+        return cur.rowcount > 0
+
+
 def stamp_formula_version(announcement_id: int, version: str) -> None:
     """Mark a filing as judged under this formula, alert or not."""
     with get_cursor() as cur:
