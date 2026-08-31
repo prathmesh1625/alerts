@@ -194,6 +194,14 @@ ALTER TABLE filing_analyses
     ADD COLUMN IF NOT EXISTS fingerprint VARCHAR(32);
 ALTER TABLE stock_alerts
     ADD COLUMN IF NOT EXISTS exchange VARCHAR(8);
+-- Which version of the formula produced this verdict. A filing analysed under
+-- rules that have since changed is re-scored from its stored raw_signals, so a
+-- rule fix repairs the filings it already got wrong instead of only applying
+-- to whatever arrives next. See scoring.formula_version().
+ALTER TABLE filing_analyses
+    ADD COLUMN IF NOT EXISTS formula_version VARCHAR(16);
+CREATE INDEX IF NOT EXISTS idx_filing_analyses_formula
+    ON filing_analyses(formula_version) WHERE status = 'ANALYZED';
 -- Rule 4 fires twice for the same session: once intraday off the live feed the
 -- moment volume-so-far clears the bar, and again after the close from Bhavcopy
 -- with the final figure. UNIQUE(symbol, session_date) means the second UPDATES
@@ -526,14 +534,15 @@ def record_analysis(
     raw_signals=None,
     fingerprint=None,
     bump_retry: bool = False,
+    formula_version=None,
 ) -> None:
     sql = """
         INSERT INTO filing_analyses (
             announcement_id, company_symbol, file_key, status, skip_reason,
             error, document_type, score, raw_signals, fingerprint, retries,
-            analyzed_at
+            formula_version, analyzed_at
         )
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
         ON CONFLICT (announcement_id) DO UPDATE SET
             status        = EXCLUDED.status,
             skip_reason   = EXCLUDED.skip_reason,
@@ -543,6 +552,7 @@ def record_analysis(
             raw_signals   = EXCLUDED.raw_signals,
             fingerprint   = EXCLUDED.fingerprint,
             retries       = filing_analyses.retries + %s,
+            formula_version = EXCLUDED.formula_version,
             analyzed_at   = NOW()
     """
     with get_cursor(dict_rows=False) as cur:
@@ -552,8 +562,100 @@ def record_analysis(
             psycopg2.extras.Json(raw_signals) if raw_signals is not None else None,
             fingerprint,
             1 if bump_retry else 0,
+            formula_version,
             1 if bump_retry else 0,
         ))
+
+
+def fetch_stale_analyses(current_version: str, days: int, limit: int) -> list:
+    """
+    Filings whose stored verdict was reached under a formula that has changed.
+
+    Only ANALYZED rows that produced NO alert, because a rule fix can only ever
+    turn a rejection into an alert here — an existing alert is re-scored in
+    place by the normal path and is not at risk of being silently lost.
+
+    This is what makes a rule fix retrospective. E2E Networks' Rs 1,000 Cr order
+    sat at score 0.0 after the rule that rejected it was corrected, because
+    nothing revisited a filing already marked ANALYZED. `raw_signals` holds
+    everything the model read, so re-scoring costs no PDF read and no model call.
+    """
+    sql = """
+        SELECT f.announcement_id, f.company_symbol, f.raw_signals, f.score,
+               f.file_key, f.formula_version,
+               a.{col_title}  AS title,
+               a.{col_url}    AS pdf_url,
+               a.{col_path}   AS local_path,
+               a.{col_time}   AS announced_at,
+               COALESCE(a.exchange, 'NSE') AS exchange
+          FROM filing_analyses f
+          JOIN {table} a ON a.{col_id} = f.announcement_id
+     LEFT JOIN stock_alerts s ON s.announcement_id = f.announcement_id
+         WHERE f.status = 'ANALYZED'
+           AND f.raw_signals IS NOT NULL
+           AND s.announcement_id IS NULL
+           AND (f.formula_version IS DISTINCT FROM %s)
+           AND a.{col_time} >= (timezone('Asia/Kolkata', now())::date
+                                - ((%s - 1) * INTERVAL '1 day'))
+      ORDER BY a.{col_time} DESC
+         LIMIT %s
+    """.format(
+        table=config.FILINGS_TABLE,
+        col_id=config.COL_ID,
+        col_title=config.COL_TITLE,
+        col_url=config.COL_PDF_URL,
+        col_path=config.COL_FILE_PATH,
+        col_time=config.COL_ANNOUNCED_AT,
+    )
+    with get_cursor() as cur:
+        cur.execute(sql, (current_version, days, limit))
+        return [dict(r) for r in cur.fetchall()]
+
+
+def stamp_formula_version(announcement_id: int, version: str) -> None:
+    """Mark a filing as judged under this formula, alert or not."""
+    with get_cursor() as cur:
+        cur.execute(
+            "UPDATE filing_analyses SET formula_version = %s WHERE announcement_id = %s",
+            (version, announcement_id),
+        )
+
+
+def fetch_near_misses(days: int, limit: int = 100) -> list:
+    """
+    Filings where a real order VALUE was extracted and no alert followed.
+
+    The signature of the failure this exists for: E2E Networks was stored with
+    document_type ORDER_WIN and raw_value 1000.0 and score 0.0, and nothing
+    anywhere said so. A rejection may well be right — a terminated order or a
+    loan belongs here — but it should be visible and checkable rather than
+    silent, especially at the top of the value range.
+    """
+    sql = """
+        SELECT f.announcement_id, f.company_symbol, f.document_type, f.score,
+               f.skip_reason, f.raw_signals, f.formula_version,
+               a.{col_title} AS title,
+               a.{col_time}  AS announced_at
+          FROM filing_analyses f
+          JOIN {table} a ON a.{col_id} = f.announcement_id
+     LEFT JOIN stock_alerts s ON s.announcement_id = f.announcement_id
+         WHERE f.status = 'ANALYZED'
+           AND s.announcement_id IS NULL
+           AND f.raw_signals IS NOT NULL
+           AND jsonb_array_length(COALESCE(f.raw_signals->'orders', '[]'::jsonb)) > 0
+           AND a.{col_time} >= (timezone('Asia/Kolkata', now())::date
+                                - ((%s - 1) * INTERVAL '1 day'))
+      ORDER BY a.{col_time} DESC
+         LIMIT %s
+    """.format(
+        table=config.FILINGS_TABLE,
+        col_id=config.COL_ID,
+        col_title=config.COL_TITLE,
+        col_time=config.COL_ANNOUNCED_AT,
+    )
+    with get_cursor() as cur:
+        cur.execute(sql, (days, limit))
+        return [dict(r) for r in cur.fetchall()]
 
 
 def save_alert(alert: dict) -> None:

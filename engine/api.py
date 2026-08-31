@@ -319,6 +319,59 @@ def get_filing_pdf(announcement_id: int):
     return FileResponse(path, media_type="application/pdf", filename=nice)
 
 
+@app.get("/api/near-misses")
+def get_near_misses(days: int = Query(default=7, ge=1, le=90),
+                    limit: int = Query(default=100, ge=1, le=500),
+                    min_value_cr: float = Query(default=0.0, ge=0)):
+    """
+    Filings where an order VALUE was extracted and no alert followed.
+
+    The audit view for the failure this exists because of: E2E Networks' Rs
+    1,000 Cr order was stored with document_type ORDER_WIN, raw_value 1000.0
+    and score 0.0, and nothing anywhere said so — it looked exactly like a
+    quiet day.
+
+    A rejection here is often correct: a terminated order, a loan, a
+    related-party ceiling all belong on this list. The point is that the
+    decision is visible and checkable rather than silent, and sorted by value
+    so the expensive mistakes surface first. `min_value_cr` filters to the
+    ones worth arguing about.
+    """
+    rows = _db_call(db.fetch_near_misses, days, limit)
+
+    out = []
+    for r in rows:
+        orders = ((r.get("raw_signals") or {}).get("orders") or [])
+        biggest = 0.0
+        for o in orders:
+            try:
+                v = float(o.get("raw_value") or 0)
+            except (TypeError, ValueError):
+                continue
+            unit = (o.get("unit") or "").lower()
+            mult = {"crore": 1.0, "lakh": 0.01, "million": 0.1,
+                    "billion": 100.0, "thousand": 0.0001, "rupee": 1e-7}.get(unit, 1.0)
+            biggest = max(biggest, v * mult)
+        if biggest < min_value_cr:
+            continue
+        out.append({
+            "announcement_id": r["announcement_id"],
+            "company_symbol": r["company_symbol"],
+            "title": r.get("title"),
+            "announced_at": r.get("announced_at"),
+            "document_type": r.get("document_type"),
+            "score": float(r["score"]) if r.get("score") is not None else None,
+            "largest_order_cr": round(biggest, 2) if biggest else None,
+            "why_no_alert": r.get("skip_reason") or "scored below the alert threshold",
+            "orders": [{"value": o.get("raw_value"), "unit": o.get("unit"),
+                        "status": o.get("status"), "customer": o.get("customer"),
+                        "scope": o.get("scope")} for o in orders],
+        })
+
+    out.sort(key=lambda x: -(x["largest_order_cr"] or 0))
+    return {"window_days": days, "count": len(out), "near_misses": out}
+
+
 @app.get("/api/latency")
 def get_latency(days: int = Query(default=2, ge=1, le=30),
                 limit: int = Query(default=100, ge=1, le=1000)):

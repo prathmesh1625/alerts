@@ -272,6 +272,40 @@ and a number that is blocked or mistyped does not silence the others. It does
 mean total message volume from the shared phone number rises with each one. Message the number first — that opens
 the 24-hour window, and until it is open every send goes out as a template.
 
+## When a rule is wrong
+
+Every rule fix used to apply only to filings that arrived afterwards. E2E
+Networks' ₹1,000 Cr order was still sitting at `score: 0.0` after the rule that
+rejected it was corrected, because nothing ever revisited a filing already
+marked `ANALYZED`.
+
+Two things close that.
+
+**Filings are re-scored when the formula changes.** Each analysis is stamped
+with `scoring.formula_version()` — a hash of the rule flags, thresholds,
+weights, bands *and the order patterns*, so it moves on its own whenever a rule
+does. The agent re-judges any filing carrying an older stamp using the
+`raw_signals` already stored: no PDF re-read, no second model call. It runs only
+when no new filing is waiting, so repairing yesterday can never delay today.
+
+A re-score can only turn a rejection into an alert, never the reverse. And when
+the PDF text cannot be recovered it declines to re-score at all rather than
+judge on weaker evidence — `document_reports_order_loss` needs that text, and
+without it a terminated order the model labelled `NEW` would slip through.
+
+**Near misses are visible.** `GET /api/near-misses` lists every filing where an
+order value was extracted and no alert followed, largest first:
+
+```bash
+curl 'https://alerts.equityalerts.in/api/near-misses?days=7&min_value_cr=100'
+```
+
+Plenty of these are correct — a terminated order, a loan, a related-party
+ceiling all belong on the list. The point is that a rejection is checkable
+instead of silent. `document_type: ORDER_WIN` with `score: 0.0` is the signature
+of the E2E failure, and it is now something you can look up rather than
+something you notice by missing an alert.
+
 ## Size floor
 
 A filing says nothing about how big the business behind it is. A shell company

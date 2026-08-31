@@ -30,8 +30,10 @@ import extractor
 import marketcap
 import pdf_fetch
 import scoring
+import pdf_text
 from pdf_text import document_fingerprint, extract_text_from_pdf_file
 from prefilter import should_analyze, should_open_pdf
+from signals import FilingSignals
 
 
 # -----------------------------------------------------------------------------
@@ -200,6 +202,7 @@ def process_filing(filing: dict) -> str:
             score=result["score"],
             raw_signals=extractor.signals_to_json(signals),
             fingerprint=fingerprint or None,
+            formula_version=scoring.formula_version(),
         )
 
         # Safety net. The prefilter catches presentations and transcripts by
@@ -286,14 +289,123 @@ def process_filing(filing: dict) -> str:
 
 
 # -----------------------------------------------------------------------------
+#  Re-scoring filings judged under an older formula
+# -----------------------------------------------------------------------------
+
+def rescore_one(row: dict) -> str:
+    """
+    Re-run the formula over signals already on disk. No model call, no re-read.
+
+    Returns a log line, or "" when nothing changed.
+    """
+    ann_id = row["announcement_id"]
+    symbol = row["company_symbol"]
+    version = scoring.formula_version()
+
+    try:
+        signals = FilingSignals(**(row.get("raw_signals") or {}))
+    except Exception as e:
+        # Stored signals we can no longer parse - stamp it so we stop retrying.
+        db.stamp_formula_version(ann_id, version)
+        return "{} ---   stored signals unreadable ({})".format(symbol, type(e).__name__)
+
+    # The document text matters: resolve_statement_unit reads the statement's
+    # own heading, and document_reports_order_loss is the backstop that catches
+    # a termination the model labelled NEW. Scoring without it would apply
+    # WEAKER checks than the original pass, so a filing we cannot re-read is
+    # left exactly as it was rather than re-judged on less evidence.
+    path = resolve_pdf_path(row.get("local_path")) or pdf_fetch.download(row.get("pdf_url"))
+    if not path:
+        return ""
+    try:
+        text = pdf_text.extract_text_from_pdf_file(path)
+    except Exception:
+        return ""
+
+    result = scoring.score_filing(signals, text, row.get("title") or "")
+    db.stamp_formula_version(ann_id, version)
+
+    if not result["qualifies"]:
+        return ""
+
+    big_enough, cap_cr, why = marketcap.passes_floor(symbol)
+    if not big_enough:
+        return ""
+
+    db.save_alert({
+        "announcement_id": ann_id,
+        "company_symbol": symbol,
+        "company_name": signals.company_name or symbol,
+        "title": row.get("title"),
+        "pdf_url": row.get("pdf_url"),
+        "local_path": row.get("local_path"),
+        "announced_at": row.get("announced_at"),
+        "document_type": signals.document_type,
+        "reporting_period": signals.reporting_period,
+        "basis": signals.basis,
+        "score": result["score"],
+        "conviction": result["conviction"],
+        "rules_hit": result["rules_hit"],
+        "profit_growth_pct": result["profit_growth_pct"],
+        "revenue_growth_pct": result["revenue_growth_pct"],
+        "order_value_cr": result["order_value_cr"],
+        "headline": result["headline"],
+        "breakdown": result["breakdown"],
+        "evidence": signals.evidence,
+        "exchange": row.get("exchange") or "NSE",
+        "market_cap_cr": cap_cr,
+    })
+    return "{} RECOVERED {:.1f} {} - {} (was {})".format(
+        symbol, result["score"], result["conviction"], result["headline"],
+        row.get("score"))
+
+
+def rescore_cycle() -> int:
+    """
+    Re-judge filings whose verdict predates the current formula.
+
+    Runs every cycle and is bounded, so it drains gradually rather than
+    stalling the queue that new filings depend on. Once every filing carries
+    the current version this finds nothing and costs one indexed query.
+    """
+    version = scoring.formula_version()
+    try:
+        rows = db.fetch_stale_analyses(version, config.RESCORE_DAYS,
+                                       config.RESCORE_BATCH)
+    except Exception as e:
+        print("[agent] rescore query failed: {}".format(e), file=sys.stderr)
+        return 0
+    if not rows:
+        return 0
+
+    recovered = 0
+    for row in rows:
+        try:
+            line = rescore_one(row)
+        except Exception as e:
+            print("[agent] rescore {} failed: {}".format(
+                row.get("company_symbol"), e), file=sys.stderr)
+            continue
+        if line:
+            print("[agent] {}".format(line), flush=True)
+            if "RECOVERED" in line:
+                recovered += 1
+    return recovered
+
+
+# -----------------------------------------------------------------------------
 #  The loop
 # -----------------------------------------------------------------------------
 
 def run_cycle() -> int:
     """One pass over the pending queue. Returns how many filings were handled."""
+    # New filings first - a rule fix repairing yesterday must never delay
+    # today's alert.
     filings = db.fetch_unanalyzed(config.BATCH_SIZE)
     if not filings:
-        return 0
+        # Only when there is nothing new to do, so re-scoring is genuinely
+        # spare-time work and cannot compete with live filings.
+        return rescore_cycle()
 
     print("[agent] {} filing(s) to analyse".format(len(filings)))
 

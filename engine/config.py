@@ -397,6 +397,19 @@ MAX_ANALYSIS_RETRIES = _int(
 # doesn't try to analyse the entire back-catalogue at once.
 BACKFILL_DAYS = _int("BACKFILL_DAYS", 7)
 
+# Re-scoring filings judged under an older version of the formula.
+#
+# Every rule fix so far applied only to what arrived next: E2E Networks'
+# Rs 1,000 Cr order was still sitting at score 0.0 after the rule that had
+# rejected it was corrected, because nothing revisited a filing already marked
+# ANALYZED. The signals are already on disk, so re-judging one costs no PDF
+# re-read and no model call - just the formula, run again.
+#
+# Bounded per cycle so it drains gradually instead of stalling the queue that
+# new filings depend on.
+RESCORE_DAYS  = _int("RESCORE_DAYS", 7)
+RESCORE_BATCH = _int("RESCORE_BATCH", 10)
+
 # The cheap keyword gate in prefilter.py. Turn off to send EVERY filing to the
 # model (accurate, much more expensive).
 PREFILTER_ENABLED = _bool("PREFILTER_ENABLED", True)

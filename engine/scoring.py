@@ -36,6 +36,45 @@ from signals import (
 )
 
 
+def formula_version() -> str:
+    """
+    A short fingerprint of everything that can change a verdict.
+
+    Every rule fix so far has been forward-only: E2E Networks' Rs 1,000 Cr order
+    was still sitting at score 0.0 after the rule that rejected it was fixed,
+    because nothing ever revisited a filing already marked ANALYZED. Stamping
+    each analysis with this lets the agent notice that its stored verdict was
+    reached under rules that no longer apply, and re-score it from the signals
+    already on disk — no PDF re-read, no second model call.
+
+    Derived rather than hand-maintained, so a rule change cannot be shipped
+    without the version moving with it.
+    """
+    import hashlib
+
+    import signals as _signals
+
+    parts = [
+        config.PROFIT_RULE_ENABLED, config.REVENUE_RULE_ENABLED,
+        config.ORDER_RULE_ENABLED,
+        config.PROFIT_GROWTH_MIN_PCT, config.PROFIT_GROWTH_FULL_PCT,
+        config.REVENUE_GROWTH_MIN_PCT, config.REVENUE_GROWTH_FULL_PCT,
+        config.ORDER_MIN_CR, config.ORDER_FULL_CR,
+        config.PROFIT_WEIGHT, config.REVENUE_WEIGHT, config.ORDER_WEIGHT,
+        config.BASE_CREDIT, config.ALERT_MIN_SCORE,
+        config.BAND_STRONG, config.BAND_MODERATE,
+        # The patterns decide what counts as an order at all, and are where
+        # the misses have actually come from.
+        _signals._IS_AN_ORDER_RE.pattern,
+        _signals._NOT_AN_ORDER_RE.pattern,
+        _signals._ORDER_WIN_TITLE_RE.pattern,
+        _signals._ORDER_LOST_RE.pattern,
+        _signals._TERMINATION_NOISE_RE.pattern,
+    ]
+    blob = "|".join(str(p) for p in parts).encode("utf-8")
+    return hashlib.sha256(blob).hexdigest()[:12]
+
+
 def _clamp01(x: float) -> float:
     return max(0.0, min(1.0, x))
 
