@@ -23,6 +23,25 @@ import whatsapp
 MARKER = {"STRONG": "🟢", "MODERATE": "🟡", "WATCH": "⚪"}
 
 
+def _say(msg: str) -> None:
+    """
+    Print without ever raising.
+
+    The alert text carries emoji, and a stdout that is not UTF-8 — a Windows
+    console at cp1252, a redirected log — makes print() raise
+    UnicodeEncodeError. That exception surfaced inside deliver_one, where
+    run_once caught it and BROKE OUT of the send loop: a failure to write a log
+    line silently stopped delivering alerts. The message itself was always
+    fine; WhatsApp takes UTF-8 over the wire regardless of the console.
+    """
+    try:
+        print(msg, flush=True)
+    except UnicodeEncodeError:
+        print(msg.encode("ascii", "replace").decode("ascii"), flush=True)
+    except Exception:
+        pass
+
+
 def _fmt_cr(v) -> str:
     if v is None:
         return ""
@@ -119,7 +138,7 @@ def _preflight() -> bool:
     the wrong people or not sending at all, and all are silent at runtime.
     """
     if not config.WHATSAPP_ENABLED:
-        print("[notifier] WHATSAPP_ENABLED is false - nothing to do", flush=True)
+        _say("[notifier] WHATSAPP_ENABLED is false - nothing to do")
         return False
     problems = []
     if not config.WHATSAPP_TOKEN:
@@ -131,12 +150,12 @@ def _preflight() -> bool:
                         "audience - name the numbers explicitly)")
     if problems:
         for p in problems:
-            print("[notifier] REFUSING TO START: {}".format(p), flush=True)
+            _say("[notifier] REFUSING TO START: {}".format(p))
         return False
 
-    print("[notifier] sending to {} recipient(s), score >= {}, cap {}/day"
-          .format(len(config.WHATSAPP_RECIPIENTS), config.WHATSAPP_MIN_SCORE,
-                  config.WHATSAPP_MAX_PER_DAY), flush=True)
+    _say("[notifier] sending to {} recipient(s), score >= {}, cap {}/day"
+         .format(len(config.WHATSAPP_RECIPIENTS), config.WHATSAPP_MIN_SCORE,
+                 config.WHATSAPP_MAX_PER_DAY))
     return True
 
 
@@ -144,16 +163,16 @@ def deliver_one(phone: str, alert: dict, dry_run: bool = False) -> bool:
     """Send a single alert. True if it went out (or would have)."""
     text = build_message(alert)
     if dry_run:
-        print("\n--- would send to {} ---\n{}\n".format(phone, text), flush=True)
+        _say("\n--- would send to {} ---\n{}\n".format(phone, text))
         return True
 
     channel, wamid = whatsapp.send(phone, text, build_template_params(alert))
     # Recorded only AFTER the API confirms, so a failure is retried rather
     # than marked delivered.
     db.mark_notified(phone, alert["announcement_id"], channel, wamid)
-    print("[notifier] sent {} to {} via {} ({}){}".format(
+    _say("[notifier] sent {} to {} via {} ({}){}".format(
         alert.get("company_symbol"), phone, channel, wamid or "no id",
-        latency_note(alert)), flush=True)
+        latency_note(alert)))
     return True
 
 
@@ -192,14 +211,13 @@ def run_once(dry_run: bool = False) -> int:
         try:
             already = db.count_notified_today(phone)
         except Exception as e:
-            print("[notifier] cannot read today's count for {}: {}".format(phone, e),
-                  flush=True)
+            _say("[notifier] cannot read today's count for {}: {}".format(phone, e))
             continue
 
         room = config.WHATSAPP_MAX_PER_DAY - already
         if room <= 0:
-            print("[notifier] daily cap reached for {} ({})".format(
-                phone, config.WHATSAPP_MAX_PER_DAY), flush=True)
+            _say("[notifier] daily cap reached for {} ({})".format(
+                phone, config.WHATSAPP_MAX_PER_DAY))
             continue
 
         try:
@@ -207,7 +225,7 @@ def run_once(dry_run: bool = False) -> int:
                 phone, config.WHATSAPP_MIN_SCORE, config.WHATSAPP_MAX_AGE_MIN,
                 limit=room)
         except Exception as e:
-            print("[notifier] cannot read pending alerts: {}".format(e), flush=True)
+            _say("[notifier] cannot read pending alerts: {}".format(e))
             continue
 
         for alert in pending:
@@ -218,12 +236,12 @@ def run_once(dry_run: bool = False) -> int:
                 # Not recorded, so it is retried next pass. Stop this
                 # recipient for now: the next alert would almost certainly
                 # hit the same wall.
-                print("[notifier] send failed for {} ({}): {}".format(
-                    phone, alert.get("company_symbol"), e), flush=True)
+                _say("[notifier] send failed for {} ({}): {}".format(
+                    phone, alert.get("company_symbol"), e))
                 break
             except Exception as e:
-                print("[notifier] unexpected failure for {}: {}: {}".format(
-                    phone, type(e).__name__, e), flush=True)
+                _say("[notifier] unexpected failure for {}: {}: {}".format(
+                    phone, type(e).__name__, e))
                 break
     return sent
 
@@ -236,7 +254,7 @@ def main():
         # A dry run must work before anything is switched on, so it skips the
         # credential checks and only needs an audience to address.
         if not config.WHATSAPP_RECIPIENTS:
-            print("[notifier] set WHATSAPP_RECIPIENTS to dry-run", flush=True)
+            _say("[notifier] set WHATSAPP_RECIPIENTS to dry-run")
             return
     elif not _preflight():
         return
@@ -244,15 +262,14 @@ def main():
     db.ensure_schema()
     if once or dry_run:
         n = run_once(dry_run)
-        print("[notifier] {} message(s)".format(n), flush=True)
+        _say("[notifier] {} message(s)".format(n))
         return
 
     while True:
         try:
             run_once()
         except Exception as e:
-            print("[notifier] pass failed: {}: {}".format(type(e).__name__, e),
-                  flush=True)
+            _say("[notifier] pass failed: {}: {}".format(type(e).__name__, e))
         time.sleep(config.WHATSAPP_POLL_SEC)
 
 

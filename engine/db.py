@@ -831,59 +831,86 @@ def count_notified_today(phone: str) -> int:
 
 def fetch_latency(days: int = 2, limit: int = 100) -> dict:
     """
-    Where end-to-end time actually goes, from timestamps already recorded.
+    Where end-to-end time goes, split into the three stages that behave
+    differently and are fixed differently.
 
-    Three clocks per alert: the exchange's own `announced_at`, `created_at`
-    when the formula settled it, and `sent_at` when WhatsApp accepted it. The
-    two gaps separate work we control from queueing we control differently,
-    which is the split you need before tuning anything.
+      exchange_sec  the filing's own timestamp -> the row appearing in our
+                    database. This is the EXCHANGE's publish lag plus our feed
+                    poll, and the exchange's half is not ours to fix.
+      analysis_sec  our row -> the alert written. PDF download and its
+                    retries, extraction, the model, scoring. This is the part
+                    that is entirely ours.
+      queue_sec     the alert -> WhatsApp accepting it. The notifier's poll.
+
+    Measured, not computed. A poll-interval calculation said the typical case
+    was ~22s; the median measured against production was 158s, and the
+    difference was invisible without this split.
     """
     sql = """
-        SELECT a.company_symbol,
-               a.announced_at,
-               a.created_at,
+        SELECT s.company_symbol,
+               s.announced_at,
+               s.created_at AS alerted_at,
                n.sent_at,
                n.channel,
-               EXTRACT(EPOCH FROM (a.created_at AT TIME ZONE 'Asia/Kolkata'
-                                   - a.announced_at))          AS analysis_sec,
-               EXTRACT(EPOCH FROM (n.sent_at - a.created_at))   AS queue_sec
-          FROM stock_alerts a
-          JOIN notified_alerts n ON n.announcement_id = a.announcement_id
-         WHERE a.created_at >= NOW() - (%s * INTERVAL '1 day')
-      ORDER BY a.created_at DESC
+               EXTRACT(EPOCH FROM (a.created_at - s.announced_at))  AS exchange_sec,
+               EXTRACT(EPOCH FROM (s.created_at AT TIME ZONE 'Asia/Kolkata'
+                                   - a.created_at))                 AS analysis_sec,
+               EXTRACT(EPOCH FROM (n.sent_at - s.created_at))       AS queue_sec
+          FROM stock_alerts s
+          JOIN announcements a ON a.id = s.announcement_id
+     LEFT JOIN notified_alerts n ON n.announcement_id = s.announcement_id
+         WHERE s.created_at >= NOW() - (%s * INTERVAL '1 day')
+      ORDER BY s.created_at DESC
          LIMIT %s
     """
     with get_cursor() as cur:
         cur.execute(sql, (days, limit))
         rows = [dict(r) for r in cur.fetchall()]
 
-    def pct(values, p):
-        if not values:
-            return None
-        s = sorted(values)
-        return round(s[min(int(len(s) * p / 100.0), len(s) - 1)], 1)
+    def stats(key):
+        # Backfilled filings are re-scored long after the fact and would
+        # otherwise dominate every percentile with hours-long "analysis".
+        vals = sorted(float(r[key]) for r in rows
+                      if r.get(key) is not None and 0 <= float(r[key]) < 3600)
+        if not vals:
+            return {"p50": None, "p90": None, "max": None, "n": 0}
+        return {
+            "p50": round(vals[len(vals) // 2], 1),
+            "p90": round(vals[min(int(len(vals) * 0.9), len(vals) - 1)], 1),
+            "max": round(vals[-1], 1),
+            "n": len(vals),
+        }
 
-    analysis = [float(r["analysis_sec"]) for r in rows if r["analysis_sec"] is not None]
-    queue = [float(r["queue_sec"]) for r in rows if r["queue_sec"] is not None]
-    total = [a + q for a, q in zip(analysis, queue)]
+    live = [r for r in rows
+            if r.get("exchange_sec") is not None
+            and r.get("analysis_sec") is not None
+            and 0 <= float(r["exchange_sec"]) < 3600
+            and 0 <= float(r["analysis_sec"]) < 3600]
+    totals = sorted(float(r["exchange_sec"]) + float(r["analysis_sec"]) for r in live)
+
+    def pct(vals, p):
+        return round(vals[min(int(len(vals) * p / 100.0), len(vals) - 1)], 1) if vals else None
 
     return {
         "sampled": len(rows),
-        "analysis_sec": {"p50": pct(analysis, 50), "p90": pct(analysis, 90),
-                         "max": round(max(analysis), 1) if analysis else None},
-        "queue_sec": {"p50": pct(queue, 50), "p90": pct(queue, 90),
-                      "max": round(max(queue), 1) if queue else None},
-        "total_sec": {"p50": pct(total, 50), "p90": pct(total, 90),
-                      "max": round(max(total), 1) if total else None},
+        "live_path": len(live),
+        "note": ("exchange_sec is the exchange's own publish lag plus our feed "
+                 "poll; analysis_sec is ours. Backfilled re-scores are excluded."),
+        "exchange_sec": stats("exchange_sec"),
+        "analysis_sec": stats("analysis_sec"),
+        "queue_sec": stats("queue_sec"),
+        "dashboard_total_sec": {
+            "p50": pct(totals, 50), "p90": pct(totals, 90),
+            "max": round(totals[-1], 1) if totals else None,
+            "under_60s": len([t for t in totals if t <= 60]),
+            "n": len(totals),
+        },
         "slowest": sorted(
             [{"symbol": r["company_symbol"],
-              "analysis_sec": round(float(r["analysis_sec"]), 1)
-              if r["analysis_sec"] is not None else None,
-              "queue_sec": round(float(r["queue_sec"]), 1)
-              if r["queue_sec"] is not None else None,
-              "channel": r["channel"]}
-             for r in rows if r["analysis_sec"] is not None],
-            key=lambda x: -(x["analysis_sec"] + (x["queue_sec"] or 0)))[:10],
+              "exchange_sec": round(float(r["exchange_sec"]), 1),
+              "analysis_sec": round(float(r["analysis_sec"]), 1)}
+             for r in live],
+            key=lambda x: -(x["exchange_sec"] + x["analysis_sec"]))[:10],
     }
 
 

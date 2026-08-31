@@ -376,13 +376,21 @@ def get_near_misses(days: int = Query(default=7, ge=1, le=90),
 def get_latency(days: int = Query(default=2, ge=1, le=30),
                 limit: int = Query(default=100, ge=1, le=1000)):
     """
-    End-to-end delivery time, split into the two halves that behave differently.
+    End-to-end time, split into the three stages that are fixed differently.
 
-    `analysis_sec` is everything upstream of delivery — the scraper noticing
-    the filing, the PDF download and any retries for a PDF the exchange has
-    not published yet, extraction, the model. `queue_sec` is the notifier's own
-    poll. A slow message is one or the other, and they are fixed differently,
-    so the split is the whole point of this endpoint.
+    `exchange_sec` — the filing's own timestamp to the row reaching our
+    database. That is the EXCHANGE's publish lag plus our feed poll, and the
+    exchange's half is not ours to fix.
+    `analysis_sec` — our row to the alert being written: PDF download and any
+    retries, extraction, the model, scoring. Entirely ours.
+    `queue_sec` — the alert to WhatsApp accepting it.
+
+    `dashboard_total_sec` is the first two, which is what "how long until it
+    appears on the dashboard" actually means.
+
+    This exists because a poll-interval CALCULATION said the typical case was
+    ~22s while the measured median was 158s. Latency claims here should come
+    from this endpoint, not from adding up config values.
     """
     return _db_call(db.fetch_latency, days, limit)
 

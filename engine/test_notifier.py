@@ -10,6 +10,7 @@ No network and no database — the API and db calls are stubbed.
 Run: pytest test_notifier.py   or   python test_notifier.py
 """
 import datetime
+import sys
 
 import config
 import db
@@ -334,6 +335,43 @@ def test_template_params_are_flattened_before_they_reach_meta():
         t = p["text"]
         assert "\n" not in t and "\t" not in t and "    " not in t, repr(t)
         assert t, "an empty template variable is rejected by Meta"
+
+
+def test_logging_cannot_stop_delivery():
+    """
+    A real bug, found because this file failed under bash and passed under
+    PowerShell. The alert text carries emoji; on a stdout that is not UTF-8
+    print() raises UnicodeEncodeError, that surfaced inside deliver_one, and
+    run_once caught it and BROKE the send loop. A log line that cannot be
+    written was stopping alerts from going out.
+    """
+    import io as _io
+
+    class Cp1252(_io.TextIOBase):
+        def write(self, s):
+            s.encode("cp1252")      # raises on any emoji, like a Windows console
+            return len(s)
+
+    saved = sys.stdout
+    sys.stdout = Cp1252()
+    try:
+        notifier._say("🟢 HAPPSTMNDS · STRONG")   # must not raise
+    finally:
+        sys.stdout = saved
+
+    m = []
+    try:
+        sender = _patch(m)
+        sys.stdout = Cp1252()
+        try:
+            with enabled():
+                sent = notifier.run_once()
+        finally:
+            sys.stdout = saved
+        assert sent == 1, "a console encoding error stopped the send"
+        assert len(sender) == 1
+    finally:
+        _restore(m)
 
 
 def test_dry_run_sends_nothing():
