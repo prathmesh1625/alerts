@@ -140,8 +140,9 @@ def _rule_revenue(signals: FilingSignals, unit=None) -> dict:
     return rule
 
 
-def _rule_orders(signals: FilingSignals, pdf_text: str = "") -> dict:
-    total = total_order_value_cr(signals, pdf_text)
+def _rule_orders(signals: FilingSignals, pdf_text: str = "",
+                 title: str = "") -> dict:
+    total = total_order_value_cr(signals, pdf_text, title)
     rule = {
         "rule": "ORDER_WIN",
         "label": "Order win >= {}".format(_fmt_cr(config.ORDER_MIN_CR)),
@@ -158,7 +159,7 @@ def _rule_orders(signals: FilingSignals, pdf_text: str = "") -> dict:
     # rupee figure and gpt-4o-mini has been observed labelling one ORDER_WIN on
     # a real filing, which would otherwise max this rule out. A TERMINATED order
     # carries one too, and is the same size as the win it cancels.
-    orders = real_orders(signals, pdf_text)
+    orders = real_orders(signals, pdf_text, title)
 
     if total is not None and total >= config.ORDER_MIN_CR:
         strength = _log_strength(total, config.ORDER_MIN_CR, config.ORDER_FULL_CR)
@@ -231,7 +232,8 @@ def build_headline(signals: FilingSignals, rules: list) -> str:
     return head
 
 
-def score_filing(signals: FilingSignals, pdf_text: str = "") -> dict:
+def score_filing(signals: FilingSignals, pdf_text: str = "",
+                 title: str = "") -> dict:
     """
     Apply the formula to one filing's extracted signals.
 
@@ -253,7 +255,7 @@ def score_filing(signals: FilingSignals, pdf_text: str = "") -> dict:
     if config.REVENUE_RULE_ENABLED:
         rules.append(_rule_revenue(signals, unit))
     if config.ORDER_RULE_ENABLED:
-        rules.append(_rule_orders(signals, pdf_text))
+        rules.append(_rule_orders(signals, pdf_text, title))
 
     score = round(sum(r["points"] for r in rules), 2)
     hits = [r["rule"] for r in rules if r["hit"]]
@@ -266,7 +268,7 @@ def score_filing(signals: FilingSignals, pdf_text: str = "") -> dict:
         "headline": build_headline(signals, rules),
         "profit_growth_pct": yoy_growth(signals.profit, unit),
         "revenue_growth_pct": yoy_growth(signals.revenue, unit),
-        "order_value_cr": total_order_value_cr(signals, pdf_text),
+        "order_value_cr": total_order_value_cr(signals, pdf_text, title),
         "breakdown": {
             "rules": rules,
             # Follows the ENABLED set, so the score is always readable against

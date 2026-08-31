@@ -192,7 +192,7 @@ def process_filing(filing: dict) -> str:
                 return "{} DUP   same document as #{}".format(symbol, owner)
 
         signals = extractor.extract_signals(text, symbol=symbol, title=title)
-        result = scoring.score_filing(signals, text)
+        result = scoring.score_filing(signals, text, title)
 
         db.record_analysis(
             ann_id, symbol, file_key, "ANALYZED",

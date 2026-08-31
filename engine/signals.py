@@ -402,7 +402,24 @@ _IS_AN_ORDER_RE = re.compile(
     r"\bl1\b|lowest bidder|tender|"
     r"supply (?:of|and)|installation|commission(?:ing)?|"
     r"engineering, procurement|\bepc\b|turnkey|"
-    r"project (?:win|award)|new project",
+    r"project (?:win|award)|new project|"
+    # Services and technology deals, which are worded nothing like an EPC
+    # contract. E2E Networks' Rs 1,000 Cr GPU deal was described as a "binding
+    # term sheet ... for the provision of NVIDIA Blackwell cloud GPUs", and
+    # every term above missed it.
+    r"term sheet|master service|\bmsa\b|statement of work|\bsow\b|"
+    r"provision of|\bengagement\b|customer win|multi-?year (?:deal|agreement)|"
+    r"definitive agreement|service agreement|supply agreement",
+    re.IGNORECASE,
+)
+
+# The exchange's OWN category for the filing. NSE files an order win under
+# "Bagging/Receiving of orders/contracts" and BSE under "Award of Order /
+# Receipt of Order" — an explicit classification by the exchange, which is
+# better evidence than any sentence the model happened to quote.
+_ORDER_WIN_TITLE_RE = re.compile(
+    r"bagg?ing|receiving of orders?|receipt of order|award of order|"
+    r"order(?:s)?[ /]*contract|awarding of|new order",
     re.IGNORECASE,
 )
 
@@ -491,32 +508,52 @@ def order_is_a_win(order: OrderWin) -> bool:
     return order.status == "NEW"
 
 
-def is_real_order(order: OrderWin) -> bool:
+def is_real_order(order: OrderWin, doc_type: str = "", title: str = "") -> bool:
     """
     True only when the document actually describes winning an order.
 
-    Three tests, and the POSITIVE one is what makes this robust:
+    Three tests:
 
       * the order must be being WON, not terminated, amended or closed out;
-      * the scope or quote must name an order, contract, award or the work
-        involved — a document has to say it won something;
-      * and must not be one of the corporate actions or regulatory matters
-        that carry a large rupee figure without being business.
+      * it must not be one of the corporate actions or regulatory matters that
+        carry a large rupee figure without being business. This is absolute —
+        nothing below can override it;
+      * and there must be positive evidence that an order was won.
 
-    The last two are checked against the order's own scope and quote, which are
-    the document's words, rather than the model's label for the document.
+    That evidence is taken from THREE sources, not one, because a single
+    sentence is too narrow a basis to decide on. E2E Networks' Rs 1,000 Cr
+    filing was rejected outright when the model quoted "entered into the
+    binding term sheet ... for the provision of NVIDIA Blackwell cloud GPUs" —
+    accurate, and containing none of the order vocabulary. The same filing
+    scored full marks when the model happened to quote the sentence with
+    "contract value" in it instead, so which sentence was picked decided
+    whether a real order alerted.
+
+      1. the order's own scope and quote;
+      2. the model's classification of the WHOLE document as an order win;
+      3. the exchange's own title category, which is assigned by NSE or BSE
+         rather than inferred by anyone.
+
+    Any one is enough, because the blacklist above has already removed the
+    documents that look like orders and are not.
     """
     if not order_is_a_win(order):
         return False
+
     blob = "{} {}".format(order.scope or "", order.quote or "")
-    if not blob.strip():
-        return False
     if _NOT_AN_ORDER_RE.search(blob):
         return False
-    return bool(_IS_AN_ORDER_RE.search(blob))
+
+    if blob.strip() and _IS_AN_ORDER_RE.search(blob):
+        return True
+    if (doc_type or "").strip().upper() in ("ORDER_WIN", "BOTH"):
+        return True
+    if title and _ORDER_WIN_TITLE_RE.search(title):
+        return True
+    return False
 
 
-def order_value_cr(order: OrderWin):
+def order_value_cr(order: OrderWin, doc_type: str = "", title: str = ""):
     """
     One order's value in crore, cross-checked against its own quote.
 
@@ -526,7 +563,7 @@ def order_value_cr(order: OrderWin):
     the QUOTE wins — it is the document's own words, where the structured
     fields are the model's interpretation of them.
     """
-    if not is_real_order(order):
+    if not is_real_order(order, doc_type, title):
         return None
 
     parsed = reinterpret_if_absurd(to_crore(order.raw_value, order.unit))
@@ -544,7 +581,8 @@ def order_value_cr(order: OrderWin):
     return parsed
 
 
-def total_order_value_cr(signals: FilingSignals, pdf_text: str = ""):
+def total_order_value_cr(signals: FilingSignals, pdf_text: str = "",
+                         title: str = ""):
     """
     Sum of every disclosed order value in the filing, or None if none were.
 
@@ -552,13 +590,15 @@ def total_order_value_cr(signals: FilingSignals, pdf_text: str = ""):
     output did not mark the termination reports the value of an order the
     company is losing, which is the reading that has to be avoided.
     """
-    values = [order_value_cr(o) for o in real_orders(signals, pdf_text)]
+    values = [order_value_cr(o, signals.document_type, title)
+              for o in real_orders(signals, pdf_text, title)]
     values = [v for v in values if v is not None]
     return round(sum(values), 2) if values else None
 
 
-def real_orders(signals: FilingSignals, pdf_text: str = ""):
+def real_orders(signals: FilingSignals, pdf_text: str = "", title: str = ""):
     """The orders that survived the corporate-action and termination filters."""
     if document_reports_order_loss(pdf_text):
         return []
-    return [o for o in (signals.orders or []) if is_real_order(o)]
+    return [o for o in (signals.orders or [])
+            if is_real_order(o, signals.document_type, title)]

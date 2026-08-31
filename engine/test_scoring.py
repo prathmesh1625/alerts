@@ -391,6 +391,109 @@ def test_a_genuine_win_carrying_both_traps_still_scores():
     assert r["order_value_cr"] == 205.89
 
 
+# -----------------------------------------------------------------------------
+#  A services deal is still an order win
+#
+#  E2E Networks announced a Rs 1,000 Cr GPU deal and it scored 0.0. The order
+#  was real, the value was right and document_type was ORDER_WIN — but the
+#  whitelist read only the model's quote, which said "binding term sheet ...
+#  for the provision of NVIDIA Blackwell cloud GPUs" and contains none of the
+#  EPC vocabulary the whitelist was built from.
+#
+#  Worse, it was a coin flip: the same filing scored 30.0 when the model
+#  happened to quote the sentence containing "contract value" instead.
+# -----------------------------------------------------------------------------
+
+E2E_ORDER = dict(
+    raw_value=1000.0, unit="crore",
+    customer="Sovereign AI company based in India",
+    scope="NVIDIA Blackwell cloud GPUs and allied services",
+    quote=("the Company has entered into the binding term sheet with a Sovereign "
+           "AI company based in India requiring high-performance computing "
+           "infrastructure, for the provision of NVIDIA Blackwell cloud GPUs and "
+           "allied services."))
+E2E_TITLE = "Bagging/Receiving of orders/contracts"
+
+
+def test_a_services_deal_scores_as_an_order_win():
+    s = results(document_type="ORDER_WIN", orders=[OrderWin(**E2E_ORDER)])
+    r = scoring.score_filing(s, "", E2E_TITLE)
+    assert "ORDER_WIN" in r["rules_hit"], r["breakdown"]["rules"][-1]["note"]
+    assert r["order_value_cr"] == 1000.0
+    assert r["qualifies"] is True
+
+
+def test_the_document_type_alone_is_enough_evidence():
+    """Even with no title, the model's reading of the whole document counts."""
+    s = results(document_type="ORDER_WIN", orders=[OrderWin(**E2E_ORDER)])
+    assert "ORDER_WIN" in scoring.score_filing(s, "", "")["rules_hit"]
+
+
+def test_the_exchange_title_alone_is_enough_evidence():
+    """
+    NSE assigns "Bagging/Receiving of orders/contracts" itself. That is better
+    evidence than any sentence the model chose to quote.
+    """
+    s = results(document_type="OTHER", orders=[OrderWin(**E2E_ORDER)])
+    assert "ORDER_WIN" in scoring.score_filing(s, "", E2E_TITLE)["rules_hit"]
+
+
+def test_the_verdict_does_not_depend_on_which_sentence_was_quoted():
+    """
+    The actual defect. Two quotes from the SAME filing, one naming the value
+    and one describing the work, must reach the same verdict.
+    """
+    with_value = OrderWin(**dict(E2E_ORDER, quote=(
+        "The arrangement has an aggregate contract value of approximately "
+        "Rs. 1,000 crore (exclusive of applicable taxes).")))
+    without = OrderWin(**E2E_ORDER)
+    a = scoring.score_filing(results(document_type="ORDER_WIN", orders=[with_value]),
+                             "", E2E_TITLE)
+    b = scoring.score_filing(results(document_type="ORDER_WIN", orders=[without]),
+                             "", E2E_TITLE)
+    assert a["rules_hit"] == b["rules_hit"], (a["rules_hit"], b["rules_hit"])
+    assert a["score"] == b["score"], (a["score"], b["score"])
+
+
+def test_the_wider_evidence_cannot_override_the_blacklist():
+    """
+    The safety property. Widening what counts as positive evidence must not
+    let a non-order back in, so each rejection is retried here with the most
+    favourable document_type and title available.
+    """
+    cases = {
+        "certificate of deposit": OrderWin(
+            raw_value=35000.0, unit="crore", scope="Certificate of deposit",
+            quote="Certificate of deposit programme of Rs 35,000 crore"),
+        "terminated order": OrderWin(
+            raw_value=205.89, unit="crore", status="TERMINATED", scope="work order",
+            quote="the value of the work order is Rs 205,89,14,000/-"),
+        "related-party ceiling": OrderWin(
+            raw_value=1500.0, unit="crore", customer="Maruti Suzuki India Limited",
+            scope="contract(s) / arrangement(s)",
+            quote="the consent of Members is hereby accorded for related party "
+                  "transactions"),
+        "regulatory penalty": OrderWin(
+            raw_value=364.73, unit="crore", scope="penalty",
+            quote="penalty of Rs 364.73 crore imposed by the authority"),
+        "secured loan": OrderWin(
+            raw_value=500.0, unit="crore", scope="term loan facility",
+            quote="term loan facility of Rs 500 crore sanctioned by the bank"),
+    }
+    for label, order in cases.items():
+        r = scoring.score_filing(
+            results(document_type="ORDER_WIN", orders=[order]), "", E2E_TITLE)
+        assert r["rules_hit"] == [], "{} was let through: {}".format(
+            label, r["breakdown"]["rules"][-1]["note"])
+
+
+def test_an_ordinary_filing_is_not_an_order_just_because_of_its_title():
+    """A title cannot conjure an order out of a filing with none in it."""
+    r = scoring.score_filing(results(document_type="OTHER", orders=[]), "", E2E_TITLE)
+    assert r["rules_hit"] == []
+    assert r["order_value_cr"] is None
+
+
 def test_a_related_party_approval_is_not_an_order():
     """
     An AGM resolution authorising a CEILING for related-party dealings has a
