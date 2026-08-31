@@ -103,6 +103,16 @@ class OrderWin(BaseModel):
             "'crore', 'million', 'billion', 'thousand', 'rupee'."
         ),
     )
+    currency: str = Field(
+        default="INR",
+        description=(
+            "The CURRENCY the order value is quoted in - a different question "
+            "from the denomination. 'USD' for 'Approximately USD 288 Million', "
+            "'INR' for 'Rs. 412.50 crore'. One of: INR, USD, EUR, GBP, JPY, "
+            "AED. Indian filings quote foreign contracts in USD often; read "
+            "the symbol or code printed next to the number and do NOT convert."
+        ),
+    )
     customer: str = Field(default="", description="Who placed the order")
     scope: str = Field(default="", description="One short line on what the order is for")
     quote: str = Field(
@@ -127,7 +137,8 @@ class OrderWin(BaseModel):
         ),
     )
 
-    @field_validator("unit", "customer", "scope", "quote", mode="before")
+    @field_validator("unit", "currency", "customer", "scope", "quote",
+                     mode="before")
     @classmethod
     def _none_is_blank(cls, v):
         return "" if v is None else v
@@ -583,7 +594,8 @@ def order_value_cr(order: OrderWin, doc_type: str = "", title: str = ""):
     if not is_real_order(order, doc_type, title):
         return None
 
-    parsed = reinterpret_if_absurd(to_crore(order.raw_value, order.unit))
+    parsed = reinterpret_if_absurd(
+        to_crore(order.raw_value, order.unit, order.currency))
     from_quote = parse_inline_value_cr(order.quote)
 
     if parsed is None:

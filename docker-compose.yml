@@ -159,6 +159,15 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY:?OPENAI_API_KEY must be set}
       - OPENAI_MODEL=${ALERT_MODEL:-gpt-4o-mini}
 
+      # Order values are quoted in foreign currency more often than is
+      # comfortable - STLTECH's contract was "Approximately USD 288 Million",
+      # about Rs 2,500 Cr, recorded as Rs 28.8 Cr before the currency was read.
+      # Approximate is fine: the score is logarithmic in value, so a stale rate
+      # moves it by a fraction of a point. Being 80x wrong is what mattered.
+      - FX_USD_INR=${ALERT_FX_USD_INR:-88}
+      - FX_EUR_INR=${ALERT_FX_EUR_INR:-96}
+      - FX_GBP_INR=${ALERT_FX_GBP_INR:-112}
+
       # PDFs are downloaded on demand into a pruned cache, NOT archived - the
       # verdict lives in the database once a filing is analysed.
       - PDF_CACHE_DIR=/app/pdf_cache

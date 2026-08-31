@@ -8,6 +8,8 @@ the code that has to be right.
 
 Run: pytest test_units.py   or   python test_units.py
 """
+import config
+import units
 from signals import FilingSignals, MetricYoY, OrderWin, PeriodFigure, order_value_cr, \
     resolve_statement_unit, total_order_value_cr, yoy_growth
 from units import (detect_statement_unit, normalise_unit, parse_inline_value_cr,
@@ -333,6 +335,61 @@ def test_an_order_needs_positive_evidence_not_just_a_number():
     real = OrderWin(raw_value=500.0, unit="crore", scope="supply of pipes",
                     quote="received a work order valued at Rs. 500 crore")
     assert is_real_order(real)
+
+
+# -----------------------------------------------------------------------------
+#  Currency — a separate axis from denomination
+#
+#  STLTECH signed a supply contract worth "Approximately USD 288 Million".
+#  Read as rupees that is Rs 28.8 Cr; it is really about Rs 2,500 Cr. No unit
+#  handling could have caught it, because "million" was the correct unit — the
+#  currency was simply not being read.
+# -----------------------------------------------------------------------------
+
+def test_usd_is_converted_to_rupees():
+    inr = units.to_crore(288.0, "million", "INR")
+    usd = units.to_crore(288.0, "million", "USD")
+    assert abs(inr - 28.8) < 0.01
+    assert usd > 2000, "USD 288 million must be thousands of crore, got {}".format(usd)
+    assert abs(usd / inr - config.FX_RATES["USD"]) < 0.01
+
+
+def test_a_missing_currency_still_means_rupees():
+    """Every existing caller omits it, and every Indian filing is in rupees."""
+    assert units.to_crore(412.5, "crore") == units.to_crore(412.5, "crore", "INR")
+    assert units.to_crore(412.5, "crore", "") == 412.5
+    assert units.to_crore(412.5, "crore", None) == 412.5
+    assert units.to_crore(412.5, "crore", "banana") == 412.5
+
+
+def test_currency_aliases():
+    for alias in ("USD", "usd", "US$", "$", "dollars"):
+        assert units.normalise_currency(alias) == "USD", alias
+    for alias in ("INR", "Rs.", "₹", "rupees", "", None):
+        assert units.normalise_currency(alias) == "INR", alias
+
+
+def test_the_quote_parser_reads_the_currency_too():
+    """
+    The cross-check has to agree with the model, or it 'corrects' a right
+    answer back to a wrong one.
+    """
+    assert units.parse_inline_value_cr("Approximately USD 288 Million") > 2000
+    assert units.parse_inline_value_cr("a contract worth $45 million") > 300
+    assert abs(units.parse_inline_value_cr("Rs. 412.50 crore") - 412.5) < 0.01
+    assert abs(units.parse_inline_value_cr("INR 45,231.00 lakh") - 452.31) < 0.01
+
+
+def test_the_currency_dict_does_not_shadow_the_unit_dict():
+    """
+    Caught in review: the currency aliases were first added under the name the
+    UNIT aliases already used, which silently broke every conversion in the
+    engine rather than only the currency ones.
+    """
+    assert units.normalise_unit("million") == "million"
+    assert units.normalise_unit("lakhs") == "lakh"
+    assert units.normalise_unit("crore") == "crore"
+    assert units.normalise_unit("not a unit") is None
 
 
 if __name__ == "__main__":

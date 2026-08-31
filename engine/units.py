@@ -70,12 +70,51 @@ def normalise_unit(unit):
     return _ALIASES.get(key)
 
 
-def to_crore(value, unit):
-    """
-    Convert a printed figure to crore. None if either input is unusable.
+# Currency, which is a SEPARATE axis from denomination and was missing entirely.
+#
+# STLTECH signed a long-term supply contract worth "Approximately USD 288
+# Million". Read as rupees that is Rs 28.8 Cr; it is really about Rs 2,400 Cr.
+# An 80x understatement turned a major contract into a minor one, and no unit
+# handling could have caught it, because "million" was correct - the currency
+# was not.
+#
+# Rates are approximate and configurable. That is honest for this purpose:
+# order values are themselves approximate, the score is logarithmic in value,
+# and a rate that is 10% stale moves a score by a fraction of a point. Being
+# 80x wrong is the failure that matters.
+_CURRENCY_ALIASES = {
+    "usd": "USD", "us$": "USD", "u.s.$": "USD", "$": "USD", "dollar": "USD",
+    "dollars": "USD", "us dollar": "USD", "us dollars": "USD",
+    "eur": "EUR", "euro": "EUR", "euros": "EUR", "€": "EUR",
+    "gbp": "GBP", "pound": "GBP", "pounds": "GBP", "£": "GBP",
+    "jpy": "JPY", "yen": "JPY",
+    "aed": "AED", "dirham": "AED",
+    "inr": "INR", "rs": "INR", "rs.": "INR", "₹": "INR", "rupee": "INR",
+    "rupees": "INR", "": "INR",
+}
 
-    `value` is the number exactly as printed (45231.0 for "45,231.00"), and
-    `unit` the denomination that applies to it.
+
+def normalise_currency(currency):
+    """Canonical ISO-ish code. Unknown or blank means INR."""
+    if currency is None:
+        return "INR"
+    return _CURRENCY_ALIASES.get(str(currency).strip().lower(), "INR")
+
+
+def fx_to_inr(currency):
+    """Rupees per unit of `currency`. 1.0 for INR and for anything unknown."""
+    import config
+    return config.FX_RATES.get(normalise_currency(currency), 1.0)
+
+
+def to_crore(value, unit, currency="INR"):
+    """
+    Convert a printed figure to crore RUPEES. None if an input is unusable.
+
+    `value` is the number exactly as printed (45231.0 for "45,231.00"), `unit`
+    the denomination that applies to it, and `currency` the money it is in —
+    which is a different question from the denomination, and one that used to
+    be ignored.
     """
     if value is None:
         return None
@@ -83,7 +122,7 @@ def to_crore(value, unit):
     if canonical is None:
         return None
     try:
-        return round(float(value) * TO_CRORE[canonical], 4)
+        return round(float(value) * TO_CRORE[canonical] * fx_to_inr(currency), 4)
     except (TypeError, ValueError):
         return None
 
@@ -125,7 +164,7 @@ def detect_statement_unit(text):
 # "Rs. 412.50 crore", "₹1,234 Cr" — a value that names its own denomination
 # right after the digits, which is how order wins are usually written.
 _INLINE_VALUE_RE = re.compile(
-    r"(?:rs\.?|inr|₹)?\s*"
+    r"(?P<cur>rs\.?|inr|₹|usd|us\s?\$|\$|eur|€|gbp|£)?\s*"
     r"(?P<num>\d{1,3}(?:,\d{2,3})*(?:\.\d+)?|\d+(?:\.\d+)?)"
     r"\s*(?P<unit>lakhs?|lacs?|crores?|crs?|millions?|mns?|billions?|bns?)\b",
     re.IGNORECASE,
@@ -168,7 +207,8 @@ def parse_inline_value_cr(text):
     m = _INLINE_VALUE_RE.search(text)
     if m:
         try:
-            return to_crore(float(m.group("num").replace(",", "")), m.group("unit"))
+            return to_crore(float(m.group("num").replace(",", "")),
+                            m.group("unit"), m.group("cur"))
         except ValueError:
             pass
 

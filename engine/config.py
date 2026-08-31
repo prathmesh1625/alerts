@@ -169,6 +169,29 @@ MAX_PDF_CHARS = _int("MAX_PDF_CHARS", 60000)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+#  Currency
+#
+#  Rupees per unit. Order values are quoted in foreign currency more often than
+#  is comfortable: STLTECH's long-term supply contract was "Approximately USD
+#  288 Million", which is about Rs 2,400 Cr and was recorded as Rs 28.8 Cr
+#  because the currency was ignored and only the denomination read.
+#
+#  Approximate on purpose. The order value itself is approximate, the score is
+#  logarithmic in it, and a rate 10% stale moves a score by a fraction of a
+#  point. An 80x error is what actually matters, and any rate at all fixes it.
+#  Override with FX_USD_INR etc. when they drift enough to care.
+# ─────────────────────────────────────────────────────────────────────────────
+FX_RATES = {
+    "INR": 1.0,
+    "USD": _float("FX_USD_INR", 88.0),
+    "EUR": _float("FX_EUR_INR", 96.0),
+    "GBP": _float("FX_GBP_INR", 112.0),
+    "JPY": _float("FX_JPY_INR", 0.58),
+    "AED": _float("FX_AED_INR", 24.0),
+}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 #  Cross-exchange duplicate detection (see pdf_text.document_fingerprint)
 #
 #  NSE and BSE publish the same filing under different pdf_urls, so the scraper
