@@ -293,6 +293,88 @@ def test_overlapping_bse_pages_are_deduped():
     assert len(urls) == len(set(urls)) == 50, len(urls)
 
 
+# -----------------------------------------------------------------------------
+#  A stale scrip master must not lose filings
+#
+#  bse_scrips.json is a frozen snapshot, so every company listed since it was
+#  generated was invisible on BSE — and dropped with nothing in the logs.
+#  AARVI's work order was disseminated on BSE at 12:26:19 and discarded here;
+#  the NSE copy arrived at 12:48 and alerted 22 minutes later than it needed to.
+# -----------------------------------------------------------------------------
+
+def test_the_ticker_is_read_from_bses_own_link():
+    assert feeds.ticker_from_nsurl(
+        "https://www.bseindia.com/stock-share-price/aarvi-encon-ltd/aarvi/544850/"
+    ) == "AARVI"
+    assert feeds.ticker_from_nsurl(
+        "https://www.bseindia.com/stock-share-price/texmaco-rail/TEXRAIL/533326"
+    ) == "TEXRAIL"
+
+
+def test_an_unreadable_link_yields_nothing_rather_than_rubbish():
+    for bad in (None, "", "https://www.bseindia.com/", "not a url",
+                "https://www.bseindia.com/stock-share-price/only-two/parts"):
+        assert feeds.ticker_from_nsurl(bad) == "", bad
+
+
+def test_a_scrip_missing_from_the_master_is_still_ingested():
+    """The AARVI case: not in the map, but BSE's own row names the ticker."""
+    row = dict(bse_row(1, scrip="544850"),
+               NSURL="https://www.bseindia.com/stock-share-price/aarvi-encon-ltd/aarvi/544850/")
+    feed = type("F", (), {"page": staticmethod(
+        lambda day, page_no: [row] if page_no == 1 else [])})()
+    saved = _install_bse(feed)
+    feeds.scrip_map = lambda: {}          # master knows nothing
+    try:
+        rows = feeds.fetch_bse()
+    finally:
+        _restore_bse(saved)
+    assert len(rows) == 1, "filing dropped despite BSE naming the ticker"
+    assert rows[0]["company_symbol"] == "AARVI"
+
+
+def test_the_master_wins_where_it_has_an_entry():
+    """
+    It maps BSE scrip to the NSE symbol, which is the one everything else here
+    is keyed on. Measured over 150 live rows the two agreed 138 times and never
+    disagreed, but where they might, the master is the deliberate answer.
+    """
+    row = dict(bse_row(1, scrip="533326"),
+               NSURL="https://www.bseindia.com/stock-share-price/x/WRONG/533326/")
+    feed = type("F", (), {"page": staticmethod(
+        lambda day, page_no: [row] if page_no == 1 else [])})()
+    saved = _install_bse(feed)
+    feeds.scrip_map = lambda: {"533326": "TEXRAIL"}
+    try:
+        rows = feeds.fetch_bse()
+    finally:
+        _restore_bse(saved)
+    assert rows[0]["company_symbol"] == "TEXRAIL"
+
+
+def test_an_unresolvable_row_is_dropped_but_reported():
+    """
+    Silence is what made this cost 22 minutes. A row we genuinely cannot place
+    must still be counted out loud.
+    """
+    import inspect
+    src = inspect.getsource(feeds.fetch_bse)
+    assert "unresolved" in src
+    assert "_log(" in src.split("unresolved.append")[1], \
+        "unresolvable rows are dropped without a log line"
+
+    row = {"ATTACHMENTNAME": "x.pdf", "SCRIP_CD": "999999", "NSURL": "",
+           "SLONGNAME": "Nowhere Ltd", "NEWS_DT": "2026-09-01T12:00:00"}
+    feed = type("F", (), {"page": staticmethod(
+        lambda day, page_no: [row] if page_no == 1 else [])})()
+    saved = _install_bse(feed)
+    feeds.scrip_map = lambda: {}
+    try:
+        assert feeds.fetch_bse() == []
+    finally:
+        _restore_bse(saved)
+
+
 def test_the_sweep_interval_is_not_longer_than_the_alert_window():
     """
     A filing missed by the plain feed waits for the next sweep. That wait must

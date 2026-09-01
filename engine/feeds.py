@@ -15,6 +15,7 @@ a second scraper from doubling the load on NSE from the same server IP.
 import json
 import os
 import threading
+import re
 import time
 from datetime import datetime, timedelta
 
@@ -238,6 +239,18 @@ BSE_REFERER = "https://www.bseindia.com/corporates/ann.html"
 _SCRIP_MAP = None
 
 
+# BSE's own row carries the ticker inside NSURL:
+#   https://www.bseindia.com/stock-share-price/aarvi-encon-ltd/AARVI/544850/
+# It is per-row and live, so unlike the static scrip master it cannot go stale.
+_NSURL_TICKER_RE = re.compile(r"/stock-share-price/[^/]+/([^/]+)/\d+", re.IGNORECASE)
+
+
+def ticker_from_nsurl(url):
+    """The ticker BSE itself puts in the row's own link, or ''."""
+    m = _NSURL_TICKER_RE.search(url or "")
+    return m.group(1).strip().upper() if m else ""
+
+
 def scrip_map():
     """
     BSE scrip code -> ticker.
@@ -338,13 +351,29 @@ def fetch_bse(pages=None, day=None):
             _log("BSE sweep incomplete ({} pages) - retrying next cycle".format(
                 max_pages))
 
-    out, seen = [], set()
+    out, seen, unresolved = [], set(), []
     for row in raw:
         attachment = _clean(row.get("ATTACHMENTNAME"))
         scrip = _clean(row.get("SCRIP_CD"))
-        symbol = mapping.get(scrip)
-        if not attachment or not symbol:
-            # No attachment, or a scrip we cannot resolve to a ticker.
+
+        # The static scrip master first, then the ticker BSE puts in the row's
+        # own NSURL. That fallback is what stops a filing being LOST because
+        # the master is stale: bse_scrips.json is a frozen snapshot, so every
+        # company listed since it was generated was invisible on BSE.
+        #
+        # AARVI's work order was disseminated on BSE at 12:26:19 and dropped
+        # here without a word; the NSE copy arrived at 12:48 and alerted 22
+        # minutes later than it needed to. Checked over 150 live rows, the two
+        # sources agreed 138 times and disagreed 0, while 12 rows could only be
+        # resolved by NSURL.
+        symbol = mapping.get(scrip) or ticker_from_nsurl(row.get("NSURL"))
+
+        if not attachment:
+            continue
+        if not symbol:
+            # Never silent again. This was a whole class of filing vanishing
+            # with nothing in the logs to show for it.
+            unresolved.append(scrip or "?")
             continue
         if attachment in seen:
             # Pages can overlap while BSE is publishing under us.
@@ -360,6 +389,10 @@ def fetch_bse(pages=None, day=None):
                 or row.get("News_submission_dt")),
             "exchange": "BSE",
         })
+
+    if unresolved:
+        _log("BSE: {} row(s) with no resolvable ticker, e.g. scrip {}".format(
+            len(unresolved), ", ".join(sorted(set(unresolved))[:5])))
     return out
 
 
