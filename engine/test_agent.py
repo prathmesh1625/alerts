@@ -32,7 +32,8 @@ import marketcap as marketcap_module
 # The size floor hits BSE and the database. Neither belongs in a unit test, and
 # the floor has its own suite (test_marketcap.py), so every company here is
 # simply "big enough". test_the_size_floor_blocks_an_alert overrides it.
-marketcap_module.passes_floor = lambda symbol: (True, 500.0, "market cap Rs 500 Cr")
+marketcap_module.passes_floor = lambda symbol, name=None: (
+    True, 500.0, "market cap Rs 500 Cr")
 agent.marketcap.passes_floor = marketcap_module.passes_floor
 import extractor as extractor_module
 from signals import FilingSignals, MetricYoY, OrderWin, PeriodFigure
@@ -526,7 +527,7 @@ def test_the_size_floor_blocks_an_alert():
     Rs 22 Cr, was raising a PROFIT_GROWTH alert.
     """
     orig = agent.marketcap.passes_floor
-    agent.marketcap.passes_floor = lambda symbol: (
+    agent.marketcap.passes_floor = lambda symbol, name=None: (
         False, 22.0, "market cap Rs 22 Cr is below the Rs 100 Cr floor")
     try:
         rec, msg = run_case(
@@ -548,7 +549,8 @@ def test_the_size_floor_blocks_an_alert():
 def test_an_unknown_market_cap_still_alerts():
     """A data gap must not silently suppress a real alert."""
     orig = agent.marketcap.passes_floor
-    agent.marketcap.passes_floor = lambda symbol: (True, None, "market cap unknown, allowed through")
+    agent.marketcap.passes_floor = lambda symbol, name=None: (
+        True, None, "market cap unknown, allowed through")
     try:
         rec, _ = run_case(
             RESULTS_LINES,

@@ -221,7 +221,8 @@ def process_filing(filing: dict) -> str:
         # filings that would otherwise ALERT, so it costs one lookup on a
         # handful of symbols a day rather than on every filing.
         if result["qualifies"]:
-            big_enough, cap_cr, why = marketcap.passes_floor(symbol)
+            big_enough, cap_cr, why = marketcap.passes_floor(
+                symbol, signals.company_name)
             if not big_enough:
                 db.record_analysis(
                     ann_id, symbol, file_key, "ANALYZED",
@@ -328,7 +329,8 @@ def rescore_one(row: dict) -> str:
     if not result["qualifies"]:
         return ""
 
-    big_enough, cap_cr, why = marketcap.passes_floor(symbol)
+    big_enough, cap_cr, why = marketcap.passes_floor(
+        symbol, signals.company_name)
     if not big_enough:
         return ""
 

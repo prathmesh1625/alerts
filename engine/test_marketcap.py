@@ -37,7 +37,10 @@ def with_stubs(cached=None, live=None, fn=None):
         marketcap.db.fetch_market_cap, marketcap.db.save_market_cap, marketcap._fetch)
     marketcap.db.fetch_market_cap = store.fetch
     marketcap.db.save_market_cap = store.save
-    marketcap._fetch = lambda sym: ((live or {}).get(sym.upper()), "999")
+    # _fetch now also takes the company name, used to resolve a scrip that
+    # the frozen master does not carry.
+    marketcap._fetch = lambda sym, name=None: (
+        (live or {}).get(sym.upper()), "999")
     try:
         return fn(), store
     finally:
@@ -140,6 +143,116 @@ def test_symbols_are_matched_case_insensitively():
 
 
 # -----------------------------------------------------------------------------
+
+# -----------------------------------------------------------------------------
+#  Resolving a company BSE's frozen scrip master has never heard of
+#
+#  bse_scrips.json is a snapshot. A symbol missing from it had no scrip, so no
+#  market cap, so the size floor was never applied to it AT ALL — 13% of alerts
+#  in one week, and two of those were microcaps the floor exists to block:
+#  GLOBAL at Rs 26 Cr and JNPR at Rs 32 Cr, both waved through.
+# -----------------------------------------------------------------------------
+
+SEARCH_HTML = (
+    "<li class='quotemenu quotemenuselect' onclick=\"liclick('505703',"
+    "'Satani Bearings Ltd')\"><a><strong>SATANI</strong> BEARINGS LTD<br />"
+    "<span><strong>SATANI</strong>BRG&nbsp;&nbsp;INE498D01012&nbsp;&nbsp;505703"
+    "</span></a></li>")
+
+
+class FakeResponse:
+    def __init__(self, text):
+        self.text = text
+        self.status_code = 200
+        self.headers = {"content-type": "text/plain"}
+
+    def json(self):
+        return self.text
+
+
+def _search(html):
+    """Run search_scrip against a canned BSE response."""
+    saved = marketcap.requests.get
+    marketcap.requests.get = lambda *a, **k: FakeResponse(html)
+    marketcap._SEARCHED.clear()
+    try:
+        return marketcap.search_scrip("Satani Bearings Ltd", "SATANIBRG")
+    finally:
+        marketcap.requests.get = saved
+        marketcap._SEARCHED.clear()
+
+
+def test_a_scrip_is_recovered_from_bses_own_search():
+    assert _search(SEARCH_HTML) == "505703"
+
+
+def test_a_result_showing_our_ticker_wins_over_the_others():
+    """Two candidates: the one carrying OUR ticker is the answer, not the first."""
+    other = SEARCH_HTML.replace("505703", "999999").replace("SATANI</strong>BRG",
+                                                            "OTHER</strong>CO")
+    assert _search(other + SEARCH_HTML) == "505703"
+
+
+def test_an_ambiguous_search_resolves_to_nothing():
+    """
+    Two results and no ticker match is a guess, and a wrong scrip means a wrong
+    market cap — worse than no market cap, because it would be believed.
+    """
+    a = SEARCH_HTML.replace("505703", "111111").replace("SATANI</strong>BRG", "AA</strong>A")
+    b = SEARCH_HTML.replace("505703", "222222").replace("SATANI</strong>BRG", "BB</strong>B")
+    assert _search(a + b) is None
+
+
+def test_an_empty_or_broken_response_is_survivable():
+    for html in ("", "<html>nothing here</html>", "<li>no liclick</li>"):
+        assert _search(html) is None, html
+
+
+def test_the_search_is_asked_once_per_company():
+    """Negatives are memoised too, or a symbol BSE cannot place is asked about
+    on every filing it ever makes."""
+    calls = {"n": 0}
+
+    def counting(*a, **k):
+        calls["n"] += 1
+        return FakeResponse("")
+
+    saved = marketcap.requests.get
+    marketcap.requests.get = counting
+    marketcap._SEARCHED.clear()
+    try:
+        for _ in range(4):
+            marketcap.search_scrip("Nowhere Ltd", "NOWHERE")
+    finally:
+        marketcap.requests.get = saved
+        marketcap._SEARCHED.clear()
+    assert calls["n"] == 1, "asked BSE {} times".format(calls["n"])
+
+
+def test_the_frozen_master_still_wins_where_it_has_an_entry():
+    """It maps to the NSE symbol everything else is keyed on; search is a fallback."""
+    saved = marketcap._SYMBOL_TO_SCRIP
+    marketcap._SYMBOL_TO_SCRIP = {"RAILTEL": "543265"}
+    called = {"n": 0}
+    saved_get = marketcap.requests.get
+    marketcap.requests.get = lambda *a, **k: called.__setitem__("n", called["n"] + 1)
+    try:
+        assert marketcap.symbol_to_scrip("RAILTEL", "RailTel Corporation") == "543265"
+        assert called["n"] == 0, "searched despite knowing the answer"
+    finally:
+        marketcap._SYMBOL_TO_SCRIP = saved
+        marketcap.requests.get = saved_get
+
+
+def test_without_a_company_name_there_is_nothing_to_search_on():
+    saved = marketcap._SYMBOL_TO_SCRIP
+    marketcap._SYMBOL_TO_SCRIP = {}
+    try:
+        assert marketcap.symbol_to_scrip("UNKNOWN") is None
+        assert marketcap.symbol_to_scrip("UNKNOWN", "") is None
+    finally:
+        marketcap._SYMBOL_TO_SCRIP = saved
+
 
 if __name__ == "__main__":
     passed = failed = 0
