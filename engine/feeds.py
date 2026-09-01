@@ -291,34 +291,75 @@ def _bse_page(day, page_no):
     return table if isinstance(table, list) else []
 
 
-def fetch_bse(pages=None, day=None):
-    """Recent BSE filings across all companies, mapped onto tickers."""
-    pages = pages or config.BSE_FEED_PAGES
-    day = day or datetime.now().strftime("%Y%m%d")
-    mapping = scrip_map()
+# When the last full-day BSE sweep ran. 0.0 means "never", so a restart sweeps
+# immediately and catches up on whatever it missed while down.
+_last_bse_sweep = 0.0
 
-    out = []
-    for page in range(1, pages + 1):
+
+def fetch_bse(pages=None, day=None):
+    """
+    Recent BSE filings across all companies, mapped onto tickers.
+
+    Same two-speed shape as fetch_nse, and for the same reason. BSE_FEED_PAGES
+    is 2, which is 100 rows; BSE published 250 across 5 pages in one ordinary
+    day. The newest pages every cycle keep latency low, and a full-day sweep
+    every NSE_SWEEP_INTERVAL_SEC is the completeness guarantee - without it a
+    burst, or any gap while this process restarts, silently loses whatever sat
+    past row 100.
+
+    Unlike NSE, BSE's pagination genuinely works, so the sweep just keeps
+    asking until a page comes back empty.
+    """
+    global _last_bse_sweep
+
+    day = day or datetime.now().strftime("%Y%m%d")
+    fast_pages = pages or config.BSE_FEED_PAGES
+
+    sweeping = (pages is None
+                and time.monotonic() - _last_bse_sweep >= config.NSE_SWEEP_INTERVAL_SEC)
+    max_pages = config.BSE_SWEEP_MAX_PAGES if sweeping else fast_pages
+
+    mapping = scrip_map()
+    raw, blank = [], False
+    for page in range(1, max_pages + 1):
         rows = _bse_page(day, page)
         if not rows:
+            blank = True
             break
-        for row in rows:
-            attachment = _clean(row.get("ATTACHMENTNAME"))
-            scrip = _clean(row.get("SCRIP_CD"))
-            symbol = mapping.get(scrip)
-            if not attachment or not symbol:
-                # No attachment, or a scrip we cannot resolve to a ticker.
-                continue
-            out.append({
-                "company_symbol": symbol.upper(),
-                "company_name": _clean(row.get("SLONGNAME")) or symbol,
-                "title": _clean(row.get("NEWSSUB")) or _clean(row.get("HEADLINE")),
-                "pdf_url": BSE_ATTACHMENT_BASE + attachment,
-                "announced_at": _parse_dt(
-                    row.get("NEWS_DT") or row.get("DT_TM")
-                    or row.get("News_submission_dt")),
-                "exchange": "BSE",
-            })
+        raw.extend(rows)
+
+    if sweeping:
+        # Only count the sweep as done if we actually reached the end. A page
+        # that times out mid-way must not buy five minutes of silence.
+        if blank:
+            _last_bse_sweep = time.monotonic()
+            _log("BSE sweep: {} row(s) across the whole day".format(len(raw)))
+        else:
+            _log("BSE sweep incomplete ({} pages) - retrying next cycle".format(
+                max_pages))
+
+    out, seen = [], set()
+    for row in raw:
+        attachment = _clean(row.get("ATTACHMENTNAME"))
+        scrip = _clean(row.get("SCRIP_CD"))
+        symbol = mapping.get(scrip)
+        if not attachment or not symbol:
+            # No attachment, or a scrip we cannot resolve to a ticker.
+            continue
+        if attachment in seen:
+            # Pages can overlap while BSE is publishing under us.
+            continue
+        seen.add(attachment)
+        out.append({
+            "company_symbol": symbol.upper(),
+            "company_name": _clean(row.get("SLONGNAME")) or symbol,
+            "title": _clean(row.get("NEWSSUB")) or _clean(row.get("HEADLINE")),
+            "pdf_url": BSE_ATTACHMENT_BASE + attachment,
+            "announced_at": _parse_dt(
+                row.get("NEWS_DT") or row.get("DT_TM")
+                or row.get("News_submission_dt")),
+            "exchange": "BSE",
+        })
     return out
 
 

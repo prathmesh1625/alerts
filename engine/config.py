@@ -87,6 +87,12 @@ STANDALONE = _bool("STANDALONE", False)
 NSE_FEED_PAGES = _int("NSE_FEED_PAGES", 2)
 BSE_FEED_PAGES = _int("BSE_FEED_PAGES", 2)
 
+# Ceiling on the BSE full-day sweep. BSE paginates properly - unlike NSE, which
+# accepts pageNo and ignores it - so the sweep just asks until a page comes back
+# empty. This only stops a runaway if BSE ever returns rows forever. 250 filings
+# across 5 pages is an ordinary day; 20 pages is 1,000 rows.
+BSE_SWEEP_MAX_PAGES = _int("BSE_SWEEP_MAX_PAGES", 20)
+
 # Seconds between feed polls.
 #
 # This is the single biggest component of end-to-end latency: at 180s a filing

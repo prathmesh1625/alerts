@@ -175,6 +175,124 @@ def test_rows_without_a_pdf_are_dropped():
     assert len(rows) == 1, [r["company_symbol"] for r in rows]
 
 
+# -----------------------------------------------------------------------------
+#  BSE has the same shape of gap, for a different reason
+#
+#  BSE's pagination genuinely works — it just was not being used. BSE_FEED_PAGES
+#  is 2, which is 100 rows, and BSE published 250 across 5 pages in one ordinary
+#  day. Anything past row 100 was only ever seen if it happened to still be near
+#  the top when we polled.
+# -----------------------------------------------------------------------------
+
+def bse_row(n, scrip="533326"):
+    return {"ATTACHMENTNAME": "{}.pdf".format(n), "SCRIP_CD": scrip,
+            "SLONGNAME": "Company {}".format(n), "NEWSSUB": "Announcement {}".format(n),
+            "NEWS_DT": "2026-09-01T13:00:0{}".format(n % 10)}
+
+
+class Bse:
+    """Pages of 50 until the day is exhausted, like the real API."""
+
+    def __init__(self, total=250, page_size=50):
+        self.total, self.page_size = total, page_size
+        self.pages_served = 0
+
+    def page(self, day, page_no):
+        self.pages_served += 1
+        start = (page_no - 1) * self.page_size
+        if start >= self.total:
+            return []
+        return [bse_row(i) for i in range(start, min(start + self.page_size, self.total))]
+
+
+def _install_bse(feed):
+    saved = (feeds._bse_page, feeds.scrip_map, feeds._last_bse_sweep)
+    feeds._bse_page = feed.page
+    feeds.scrip_map = lambda: {"533326": "TEXRAIL"}
+    feeds._last_bse_sweep = 0.0
+    return saved
+
+
+def _restore_bse(saved):
+    feeds._bse_page, feeds.scrip_map, feeds._last_bse_sweep = saved
+
+
+def test_the_bse_sweep_reads_the_whole_day():
+    f = Bse(total=250)
+    saved = _install_bse(f)
+    try:
+        rows = feeds.fetch_bse()
+    finally:
+        _restore_bse(saved)
+    assert len(rows) == 250, "only got {} of 250".format(len(rows))
+
+
+def test_bse_between_sweeps_reads_only_the_newest_pages():
+    """The fast path is what keeps latency low; the sweep is not free."""
+    f = Bse(total=250)
+    saved = _install_bse(f)
+    try:
+        feeds.fetch_bse()                 # cold: sweeps the day
+        served = f.pages_served
+        rows = feeds.fetch_bse()          # within the interval
+    finally:
+        _restore_bse(saved)
+    assert len(rows) == config.BSE_FEED_PAGES * 50
+    assert f.pages_served - served <= config.BSE_FEED_PAGES + 1
+
+
+def test_an_incomplete_bse_sweep_is_retried_next_cycle():
+    """
+    A page that times out mid-way must not buy five minutes of silence — that
+    is exactly when a filing would be missed.
+    """
+    f = Bse(total=250)
+    calls = {"n": 0}
+
+    def flaky(day, page_no):
+        calls["n"] += 1
+        if calls["n"] == 3:
+            return []          # looks like the end, but is a failure
+        return f.page(day, page_no)
+
+    saved = _install_bse(f)
+    feeds._bse_page = flaky
+    try:
+        feeds.fetch_bse()
+        before = calls["n"]
+        feeds.fetch_bse()
+        assert calls["n"] > before + config.BSE_FEED_PAGES - 1
+    finally:
+        _restore_bse(saved)
+
+
+def test_the_bse_sweep_is_bounded():
+    """If BSE ever returned rows forever, this must still terminate."""
+    endless = type("Endless", (), {
+        "page": staticmethod(lambda day, page_no: [bse_row(page_no * 100 + i)
+                                                  for i in range(50)])})()
+    saved = _install_bse(endless)
+    try:
+        rows = feeds.fetch_bse()
+    finally:
+        _restore_bse(saved)
+    assert len(rows) <= config.BSE_SWEEP_MAX_PAGES * 50
+
+
+def test_overlapping_bse_pages_are_deduped():
+    """Pages shift under us while BSE is publishing."""
+    dup = type("Dup", (), {
+        "page": staticmethod(lambda day, page_no:
+                             [bse_row(i) for i in range(50)] if page_no <= 2 else [])})()
+    saved = _install_bse(dup)
+    try:
+        rows = feeds.fetch_bse()
+    finally:
+        _restore_bse(saved)
+    urls = [r["pdf_url"] for r in rows]
+    assert len(urls) == len(set(urls)) == 50, len(urls)
+
+
 def test_the_sweep_interval_is_not_longer_than_the_alert_window():
     """
     A filing missed by the plain feed waits for the next sweep. That wait must

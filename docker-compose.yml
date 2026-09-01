@@ -79,6 +79,11 @@ services:
       # anything beyond them between polls is lost for good.
       - NSE_SWEEP_INTERVAL_SEC=${ALERT_NSE_SWEEP_INTERVAL_SEC:-300}
       - BSE_FEED_PAGES=${ALERT_BSE_FEED_PAGES:-2}
+      # BSE paginates properly, we just were not using it: 2 pages is 100 rows
+      # and BSE published 250 across 5 pages in an ordinary day. The full-day
+      # sweep runs on NSE_SWEEP_INTERVAL_SEC and stops when a page comes back
+      # empty; this only caps a runaway.
+      - BSE_SWEEP_MAX_PAGES=${ALERT_BSE_SWEEP_MAX_PAGES:-20}
       # Unused by this process, but config.py reads it at import.
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
     depends_on:
