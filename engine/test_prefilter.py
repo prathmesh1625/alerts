@@ -10,7 +10,7 @@ get through even when their titles are unhelpful.
 
 Run: pytest test_prefilter.py   or   python test_prefilter.py
 """
-from prefilter import should_analyze, should_open_pdf
+from prefilter import restates_old_results, should_analyze, should_open_pdf
 
 RESULTS_BODY = """
     STATEMENT OF UNAUDITED FINANCIAL RESULTS FOR THE QUARTER ENDED 30 SEPTEMBER 2025
@@ -334,6 +334,90 @@ The Board's Report and the Corporate Governance Report form part of the
 Integrated Annual Report. Members may cast their vote by remote e-voting.
 This is an Ordinary Resolution concerning related party transactions.
 """
+
+
+# -----------------------------------------------------------------------------
+#  A results press release recaps the quarter
+#
+#  The third document that restates rather than reports, after presentations and
+#  transcripts, and it looked like neither. TECHNOCRAF filed one minutes after
+#  its Q1 FY27 results; it recapped a Rs 148.70 Cr Letter of Award and that
+#  alerted as though the order had been won that afternoon. The order was real —
+#  the award came in a quarter that had ended two months earlier.
+# -----------------------------------------------------------------------------
+
+RESULTS_PR = (
+    "Subject: Press Release with respect to Consolidated and Standalone "
+    "Unaudited Financial Results for the quarter ended June 30, 2026. "
+    "In continuation of our letter of today's date on the Consolidated and "
+    "Standalone Unaudited Financial Results for the quarter ended June 30, "
+    "2026, we are enclosing the press release. EBITDA increased by 16.36% to "
+    "Rs. 18.49 crore. Revenue from operations grew by 2.24% to Rs. 92.70 crore. "
+    "Letter of Award for the work valuing Rs. 14870.05 lakhs for the "
+    "Construction of Underground Sewerage System of Bhubaneswar Development "
+    "Authority on Engineering, Procurement & Construction (EPC) Contract."
+)
+
+
+def test_a_results_press_release_is_treated_as_a_restatement():
+    restated, why = restates_old_results("Press Release / Media Release", RESULTS_PR)
+    assert restated, "a quarter's recap alerted as fresh news"
+    assert "press release" in why.lower(), why
+
+
+def test_it_is_stopped_even_though_it_contains_a_real_order():
+    """
+    The order in it IS genuine — that is exactly why this is worth catching.
+    A real order recapped months later is still not today's news.
+    """
+    ok, why = should_analyze("Press Release / Media Release", RESULTS_PR)
+    assert not ok, "reached the model despite recapping a closed quarter"
+
+
+def test_a_press_release_announcing_a_NEW_order_still_passes():
+    """
+    The risk of the check above, and the reason it needs three markers rather
+    than two: an order announcement is often issued as a press release, and it
+    says "press release" too.
+    """
+    order_pr = (
+        "Press Release: The Company has received a Letter of Award from NTPC "
+        "Limited valued at Rs. 412.50 crore for the supply and installation of "
+        "equipment. About the Company: revenue from operations of Rs 900 crore "
+        "in the last financial year."
+    )
+    restated, why = restates_old_results("Bagging/Receiving of orders/contracts",
+                                         order_pr)
+    assert not restated, why
+    ok, _ = should_analyze("Bagging/Receiving of orders/contracts", order_pr)
+    assert ok
+
+
+def test_the_results_filing_itself_is_still_analysed():
+    """
+    Only the PRESS RELEASE about the results restates them. The results filing
+    is where the numbers are first reported and must still be read.
+    """
+    results = (
+        "Unaudited Financial Results for the quarter ended June 30, 2026. "
+        "Revenue from operations 92.70. Profit after tax 10.70. "
+        "Total income 95.00. Earnings per share 2.10."
+    )
+    restated, why = restates_old_results(
+        "Financial Results for the quarter ended 30.06.2026", results)
+    assert not restated, why
+
+
+def test_the_markers_survived_the_file():
+    """
+    Escaping has mangled a regex in this file more than once: a heredoc turned
+    \\b into a literal backspace byte, which is invisible in terminal output and
+    silently stops the pattern matching anything.
+    """
+    import prefilter
+    for rx, _ in prefilter._RESULTS_PRESS_RELEASE_MARKERS:
+        assert "\\x08" not in rx.pattern, rx.pattern
+        assert chr(8) not in rx.pattern, repr(rx.pattern)
 
 
 def test_an_agm_notice_is_stopped_by_its_body():

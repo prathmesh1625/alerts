@@ -156,6 +156,30 @@ _PRESENTATION_MARKERS = (
 )
 
 
+# A RESULTS press release: the quarter's numbers, plus its highlights.
+#
+# The third member of the family that already covers presentations and
+# transcripts, and it slipped through because it looks like neither. TECHNOCRAF
+# filed one minutes after its Q1 FY27 results; it recapped a Rs 148.70 Cr
+# Letter of Award from Bhubaneswar Development Authority, and that alerted as
+# though the order had been won that afternoon. The order was genuine - the
+# award was received during a quarter that had ended two months earlier.
+#
+# THREE markers required, not the usual two, because each is individually
+# weaker: a press release announcing a genuine new order says "press release"
+# too, and may well mention revenue in an "about the company" footer. What it
+# does not do is announce the quarter's results at the same time.
+_RESULTS_PRESS_RELEASE_MARKERS = (
+    (re.compile(r"press release", re.IGNORECASE), 1),
+    (re.compile(r"financial results for the (?:quarter|half.?year|year|period) "
+                r"ended", re.IGNORECASE), 1),
+    (re.compile(r"unaudited financial results", re.IGNORECASE), 1),
+    (re.compile(r"\bebitda\b", re.IGNORECASE), 1),
+    (re.compile(r"(?:profit after tax|revenue from operations)\s+(?:grew|rose|"
+                r"increased|declined)", re.IGNORECASE), 1),
+)
+
+
 # An annual report / AGM notice. The title forms are already on
 # _NEVER_RELEVANT_TITLE, but NSE frequently files these under a generic caption
 # — "General Updates" is what the live feed actually sends — and then only the
@@ -241,6 +265,8 @@ def restates_old_results(title: str, text: str = "") -> tuple:
         return True, "reads as an investor presentation"
     if _markers_clear(text, _ANNUAL_REPORT_MARKERS) >= 2:
         return True, "reads as an annual report or AGM notice"
+    if _markers_clear(text, _RESULTS_PRESS_RELEASE_MARKERS) >= 3:
+        return True, "reads as a results press release, which recaps the quarter"
     return False, ""
 
 
