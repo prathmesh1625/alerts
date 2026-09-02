@@ -45,6 +45,8 @@ REQUIRED_ALERT_KEYS = {
     "score", "conviction", "rules_hit", "profit_growth_pct",
     "revenue_growth_pct", "order_value_cr", "headline", "breakdown", "evidence",
     "exchange", "market_cap_cr",
+    # Six-month price context, shown on the dashboard beside the order size.
+    "price_now", "price_6m_ago", "price_change_6m_pct",
 }
 
 

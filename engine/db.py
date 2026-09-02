@@ -200,6 +200,15 @@ ALTER TABLE stock_alerts
 -- to whatever arrives next. See scoring.formula_version().
 ALTER TABLE filing_analyses
     ADD COLUMN IF NOT EXISTS formula_version VARCHAR(16);
+-- Where the share price was when the alert fired, and where it was six months
+-- earlier. Stored on the alert rather than looked up on read, so the dashboard
+-- shows what was true AT THE TIME rather than a figure that drifts afterwards.
+ALTER TABLE stock_alerts
+    ADD COLUMN IF NOT EXISTS price_now NUMERIC(16,4);
+ALTER TABLE stock_alerts
+    ADD COLUMN IF NOT EXISTS price_6m_ago NUMERIC(16,4);
+ALTER TABLE stock_alerts
+    ADD COLUMN IF NOT EXISTS price_change_6m_pct NUMERIC(10,2);
 CREATE INDEX IF NOT EXISTS idx_filing_analyses_formula
     ON filing_analyses(formula_version) WHERE status = 'ANALYZED';
 -- Rule 4 fires twice for the same session: once intraday off the live feed the
@@ -715,7 +724,8 @@ def save_alert(alert: dict) -> None:
             local_path, announced_at, document_type, reporting_period, basis,
             score, conviction, rules_hit, profit_growth_pct,
             revenue_growth_pct, order_value_cr, headline, breakdown, evidence,
-            exchange, market_cap_cr
+            exchange, market_cap_cr, price_now, price_6m_ago,
+            price_change_6m_pct
         )
         VALUES (
             %(announcement_id)s, %(company_symbol)s, %(company_name)s, %(title)s,
@@ -723,7 +733,8 @@ def save_alert(alert: dict) -> None:
             %(reporting_period)s, %(basis)s, %(score)s, %(conviction)s,
             %(rules_hit)s, %(profit_growth_pct)s, %(revenue_growth_pct)s,
             %(order_value_cr)s, %(headline)s, %(breakdown)s, %(evidence)s,
-            %(exchange)s, %(market_cap_cr)s
+            %(exchange)s, %(market_cap_cr)s, %(price_now)s,
+            %(price_6m_ago)s, %(price_change_6m_pct)s
         )
         ON CONFLICT (announcement_id) DO UPDATE SET
             score              = EXCLUDED.score,
@@ -734,9 +745,17 @@ def save_alert(alert: dict) -> None:
             order_value_cr     = EXCLUDED.order_value_cr,
             headline           = EXCLUDED.headline,
             breakdown          = EXCLUDED.breakdown,
-            evidence           = EXCLUDED.evidence
+            evidence           = EXCLUDED.evidence,
+            price_now          = EXCLUDED.price_now,
+            price_6m_ago       = EXCLUDED.price_6m_ago,
+            price_change_6m_pct = EXCLUDED.price_change_6m_pct
     """
     payload = dict(alert)
+    # Optional everywhere they are written from, so a caller that predates
+    # these columns still inserts cleanly.
+    for k in ("price_now", "price_6m_ago", "price_change_6m_pct",
+              "market_cap_cr", "exchange"):
+        payload.setdefault(k, None)
     payload["breakdown"] = psycopg2.extras.Json(payload.get("breakdown") or {})
     payload["evidence"] = psycopg2.extras.Json(payload.get("evidence") or [])
     with get_cursor(dict_rows=False) as cur:
@@ -1218,6 +1237,25 @@ def fetch_volume_alerts(days: int, min_score: float = 0.0, symbol=None,
     with get_cursor() as cur:
         cur.execute(sql, params)
         return [dict(r) for r in cur.fetchall()]
+
+
+def close_on(symbol, session_date):
+    """That symbol's close on one past session, or None."""
+    with get_cursor() as cur:
+        cur.execute("SELECT close FROM daily_volume WHERE symbol = %s AND session_date = %s",
+                    (symbol.upper(), session_date))
+        row = cur.fetchone()
+        return float(row["close"]) if row and row["close"] is not None else None
+
+
+def latest_close(symbol):
+    """The most recent close we hold for a symbol, or None."""
+    with get_cursor() as cur:
+        cur.execute(
+            "SELECT close FROM daily_volume WHERE symbol = %s AND close IS NOT NULL "
+            "ORDER BY session_date DESC LIMIT 1", (symbol.upper(),))
+        row = cur.fetchone()
+        return float(row["close"]) if row else None
 
 
 def fetch_market_cap(symbol, ttl_days):

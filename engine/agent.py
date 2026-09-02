@@ -29,6 +29,7 @@ import db
 import extractor
 import marketcap
 import pdf_fetch
+import pricehistory
 import scoring
 import pdf_text
 from pdf_text import document_fingerprint, extract_text_from_pdf_file
@@ -235,6 +236,17 @@ def process_filing(filing: dict) -> str:
                 return "{} ---   {} (score {:.1f})".format(symbol, why, result["score"])
             result["market_cap_cr"] = cap_cr
 
+            # Six-month context, from the Bhavcopy baseline. Looked up only for
+            # a filing that is about to alert, and one Bhavcopy covers every
+            # symbol on that date, so a whole day of alerts costs one download.
+            try:
+                then, now, pct = pricehistory.change(symbol)
+                result["price_6m_ago"], result["price_now"] = then, now
+                result["price_change_6m_pct"] = pct
+            except Exception as e:
+                print("[agent] price history unavailable for {}: {}".format(symbol, e),
+                      file=sys.stderr)
+
         if not result["qualifies"]:
             return "{} ---   score {:.1f} (below {:.0f})".format(
                 symbol, result["score"], config.ALERT_MIN_SCORE
@@ -262,6 +274,9 @@ def process_filing(filing: dict) -> str:
             "evidence": signals.evidence,
             "exchange": filing.get("exchange") or "NSE",
             "market_cap_cr": result.get("market_cap_cr"),
+            "price_now": result.get("price_now"),
+            "price_6m_ago": result.get("price_6m_ago"),
+            "price_change_6m_pct": result.get("price_change_6m_pct"),
         })
         return "{} ALERT {:.1f} {} - {}".format(
             symbol, result["score"], result["conviction"], result["headline"]

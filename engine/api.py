@@ -150,6 +150,8 @@ def get_config():
             "cooldown_sessions": config.VOLUME_COOLDOWN_SESSIONS,
             "scored_separately": True,
         },
+        "order_buckets": list(ORDER_BUCKETS),
+        "price_history_months": config.PRICE_HISTORY_MONTHS,
         "min_market_cap_cr": config.MIN_MARKET_CAP_CR,
         "alert_min_score": config.ALERT_MIN_SCORE,
         "base_credit": config.BASE_CREDIT,
@@ -157,6 +159,25 @@ def get_config():
         "model": config.OPENAI_MODEL,
         "default_window_days": config.ALERT_TTL_DAYS,
     }
+
+
+# The order-size buckets the dashboard groups by. Boundaries live here so
+# "50-100 Cr" means the same thing everywhere.
+ORDER_BUCKETS = (
+    {"key": "SMALL", "label": "Rs 1-50 Cr", "min": 0.0, "max": 50.0},
+    {"key": "MID", "label": "Rs 50-100 Cr", "min": 50.0, "max": 100.0},
+    {"key": "LARGE", "label": "Rs 100 Cr+", "min": 100.0, "max": None},
+)
+
+
+def _order_bucket(value):
+    """Which size bucket an order value falls in, or None if there is no order."""
+    if value is None:
+        return None
+    for b in ORDER_BUCKETS:
+        if value >= b["min"] and (b["max"] is None or value < b["max"]):
+            return b["key"]
+    return None
 
 
 @app.get("/api/alerts")
@@ -172,9 +193,23 @@ def get_alerts(
     for r in rows:
         # NUMERIC comes back as Decimal, which json can't serialise.
         for k in ("score", "profit_growth_pct", "revenue_growth_pct",
-                  "order_value_cr", "market_cap_cr"):
+                  "order_value_cr", "market_cap_cr", "price_now",
+                  "price_6m_ago", "price_change_6m_pct"):
             if r.get(k) is not None:
                 r[k] = float(r[k])
+
+        # The order as a share of the company. A Rs 200 Cr win against a
+        # Rs 2,000 Cr company is 10% and material; the same order against a
+        # Rs 50,000 Cr company is rounding. Computed here rather than in the
+        # browser so the WhatsApp message and the dashboard cannot disagree.
+        order, cap = r.get("order_value_cr"), r.get("market_cap_cr")
+        r["order_to_mcap_pct"] = (
+            round(order / cap * 100.0, 2) if order and cap and cap > 0 else None)
+
+        # Which size bucket the order falls in, named once here so the
+        # dashboard, the API and any future consumer agree on the boundaries.
+        r["order_bucket"] = _order_bucket(order)
+
     return {"window_days": window, "count": len(rows), "alerts": rows}
 
 

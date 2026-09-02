@@ -457,6 +457,23 @@ ALERT_TTL_DAYS = _int("ALERT_TTL_DAYS", 5)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+#  Price history
+#
+#  How the stock has moved over the window, for context on an order win: a
+#  Rs 200 Cr order reads differently against a share that has doubled since
+#  March than against one that has halved.
+#
+#  Sourced from NSE's Bhavcopy archive because the alternatives do not work -
+#  NSE's historical API answers 503 from this IP and BSE's CSV download returns
+#  an empty body. One Bhavcopy covers every symbol on that date, so a day of
+#  alerts costs one request.
+# ─────────────────────────────────────────────────────────────────────────────
+PRICE_HISTORY_MONTHS = _int("PRICE_HISTORY_MONTHS", 6)
+# A Bhavcopy simply does not exist for a holiday, so step back to find one.
+PRICE_BASELINE_MAX_BACKTRACK = _int("PRICE_BASELINE_MAX_BACKTRACK", 7)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 #  API
 # ─────────────────────────────────────────────────────────────────────────────
 API_HOST = os.getenv("API_HOST", "0.0.0.0")

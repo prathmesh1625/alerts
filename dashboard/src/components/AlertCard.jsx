@@ -53,6 +53,34 @@ function RuleRow({ rule }) {
     );
 }
 
+function Figure({ label, value, title, strong, muted, tone }) {
+    const toneClass =
+        tone === "up"
+            ? "text-band-strong"
+            : tone === "down"
+              ? "text-band-watch"
+              : muted
+                ? "text-brand-textMuted"
+                : strong
+                  ? "text-brand-cyan"
+                  : "text-brand-light";
+    return (
+        <div
+            title={title}
+            className={`rounded-lg border px-2.5 py-1.5 ${
+                strong && !muted
+                    ? "border-brand-cyan/30 bg-brand-cyan/[0.06]"
+                    : "border-brand-border bg-brand-bg2/50"
+            }`}
+        >
+            <div className="text-[10px] uppercase tracking-wider text-brand-textMuted">
+                {label}
+            </div>
+            <div className={`mt-0.5 font-mono text-sm ${toneClass}`}>{value}</div>
+        </div>
+    );
+}
+
 export default function AlertCard({ alert }) {
     const [open, setOpen] = useState(false);
     const band = bandStyle(alert.conviction);
@@ -95,15 +123,6 @@ export default function AlertCard({ alert }) {
                                     {alert.exchange}
                                 </span>
                             )}
-                            {alert.market_cap_cr != null && (
-                                <span title="Market capitalisation">
-                                    ₹
-                                    {Number(alert.market_cap_cr).toLocaleString("en-IN", {
-                                        maximumFractionDigits: 0
-                                    })}{" "}
-                                    Cr
-                                </span>
-                            )}
                             {alert.document_type && (
                                 <span>{alert.document_type.replace("_", " ")}</span>
                             )}
@@ -115,6 +134,51 @@ export default function AlertCard({ alert }) {
                 <p className="mt-3 text-[15px] font-medium leading-snug text-brand-light">
                     {alert.headline}
                 </p>
+
+                {/* ── size and context ───────────────────────────────────────
+                    Market cap used to sit in the muted header strip, where it
+                    read as metadata. It is the number that says whether an
+                    order matters, so it belongs with the call. */}
+                <div className="mt-3 flex flex-wrap items-stretch gap-2">
+                    <Figure
+                        label="Market cap"
+                        value={
+                            alert.market_cap_cr != null
+                                ? "₹" +
+                                  Number(alert.market_cap_cr).toLocaleString("en-IN", {
+                                      maximumFractionDigits: 0
+                                  }) +
+                                  " Cr"
+                                : "unknown"
+                        }
+                        muted={alert.market_cap_cr == null}
+                        strong
+                    />
+                    {alert.order_to_mcap_pct != null && (
+                        <Figure
+                            label="Order / m-cap"
+                            value={alert.order_to_mcap_pct.toFixed(1) + "%"}
+                            title={`Order value as a share of the company: a large order against a small company moves the business, the same order against a large one does not`}
+                            strong={alert.order_to_mcap_pct >= 10}
+                        />
+                    )}
+                    {alert.price_change_6m_pct != null && (
+                        <Figure
+                            label="6-month move"
+                            value={
+                                (alert.price_change_6m_pct >= 0 ? "+" : "") +
+                                alert.price_change_6m_pct.toFixed(1) +
+                                "%"
+                            }
+                            title={
+                                alert.price_6m_ago != null && alert.price_now != null
+                                    ? `₹${alert.price_6m_ago} → ₹${alert.price_now}`
+                                    : undefined
+                            }
+                            tone={alert.price_change_6m_pct >= 0 ? "up" : "down"}
+                        />
+                    )}
+                </div>
 
                 {notes.length > 0 && (
                     <ul className="mt-1.5 space-y-0.5">

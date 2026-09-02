@@ -173,6 +173,12 @@ services:
       - FX_EUR_INR=${ALERT_FX_EUR_INR:-96}
       - FX_GBP_INR=${ALERT_FX_GBP_INR:-112}
 
+      # Six-month price context on each alert, from the NSE Bhavcopy archive.
+      # One download covers every symbol on that date, so a day of alerts costs
+      # one request. A BSE-only listing has no Bhavcopy row and is reported as
+      # unknown rather than guessed.
+      - PRICE_HISTORY_MONTHS=${ALERT_PRICE_HISTORY_MONTHS:-6}
+
       # PDFs are downloaded on demand into a pruned cache, NOT archived - the
       # verdict lives in the database once a filing is analysed.
       - PDF_CACHE_DIR=/app/pdf_cache

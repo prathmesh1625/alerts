@@ -60,6 +60,8 @@ export default function Alerts({ onUpdated }) {
 
     const [days, setDays] = useState(3);
     const [minScore, setMinScore] = useState(0);
+    const [session, setSession] = useState("ALL");
+    const [size, setSize] = useState("ALL");
     const [query, setQuery] = useState("");
 
     const [loading, setLoading] = useState(true);
@@ -102,17 +104,35 @@ export default function Alerts({ onUpdated }) {
         return () => clearInterval(id);
     }, [load]);
 
-    // Symbol/name search is client-side: the result set is already capped at a
+    // All three filters are client-side: the result set is already capped at a
     // few hundred rows, so a round-trip per keystroke would buy nothing.
     const visible = useMemo(() => {
         const q = query.trim().toLowerCase();
-        if (!q) return alerts;
-        return alerts.filter(
-            (a) =>
-                a.company_symbol?.toLowerCase().includes(q) ||
-                a.company_name?.toLowerCase().includes(q)
-        );
-    }, [alerts, query]);
+        return alerts.filter((a) => {
+            if (
+                q &&
+                !a.company_symbol?.toLowerCase().includes(q) &&
+                !a.company_name?.toLowerCase().includes(q)
+            ) {
+                return false;
+            }
+
+            if (session !== "ALL") {
+                // announced_at is the exchange's own IST timestamp, stored
+                // naive. Reading the clock off the string avoids the browser
+                // reinterpreting it in the viewer's timezone, which would put
+                // an evening filing in the wrong half of the day.
+                const hhmm = (a.announced_at || "").slice(11, 16);
+                if (!hhmm) return false;
+                const afterClose = hhmm >= "15:30";
+                if (session === "MARKET" && afterClose) return false;
+                if (session === "AFTER" && !afterClose) return false;
+            }
+
+            if (size !== "ALL" && a.order_bucket !== size) return false;
+            return true;
+        });
+    }, [alerts, query, session, size]);
 
     return (
         <main className="mx-auto max-w-7xl space-y-5 px-5 py-6">
@@ -127,9 +147,14 @@ export default function Alerts({ onUpdated }) {
                 <FilterBar
                     days={days}
                     minScore={minScore}
+                    session={session}
+                    size={size}
                     query={query}
+                    buckets={config?.order_buckets}
                     onDays={setDays}
                     onMinScore={setMinScore}
+                    onSession={setSession}
+                    onSize={setSize}
                     onQuery={setQuery}
                     onRefresh={load}
                     refreshing={refreshing}
@@ -148,9 +173,13 @@ export default function Alerts({ onUpdated }) {
                 ) : (
                     <>
                         <div className="text-xs text-brand-textMuted">
-                            Showing {visible.length} alert
-                            {visible.length === 1 ? "" : "s"}
+                            Showing {visible.length} of {alerts.length} alert
+                            {alerts.length === 1 ? "" : "s"}
                             {query && ` matching “${query}”`}
+                            {session !== "ALL" &&
+                                (session === "MARKET"
+                                    ? " · filed during market hours"
+                                    : " · filed after the close")}
                         </div>
                         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
                             {visible.map((a) => (

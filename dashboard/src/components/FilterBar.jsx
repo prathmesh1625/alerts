@@ -11,6 +11,24 @@ const WINDOWS = [
     { label: "3 months", value: 90 }
 ];
 
+// Split at the closing bell. A filing during the session can be traded on the
+// same day; one after 15:30 cannot, and reads as tomorrow's news. They are
+// different things to look at, so they are separable.
+const SESSIONS = [
+    { label: "All day", value: "ALL" },
+    { label: "Market hours", value: "MARKET", hint: "00:00 - 15:30 IST" },
+    { label: "After close", value: "AFTER", hint: "15:30 - 24:00 IST" }
+];
+
+// Order size. Boundaries come from /api/config so the API and the dashboard
+// cannot drift apart; these are the fallback before config has loaded.
+const DEFAULT_SIZES = [
+    { label: "Any size", value: "ALL" },
+    { label: "Rs 1-50 Cr", value: "SMALL" },
+    { label: "Rs 50-100 Cr", value: "MID" },
+    { label: "Rs 100 Cr+", value: "LARGE" }
+];
+
 const BANDS = [
     { label: "All", value: 0 },
     { label: "Watch+", value: 20 },
@@ -25,6 +43,7 @@ function Segmented({ options, value, onChange }) {
                 <button
                     key={o.value}
                     onClick={() => onChange(o.value)}
+                    title={o.hint || undefined}
                     className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
                         value === o.value
                             ? "bg-brand-cyan/15 text-brand-cyan"
@@ -41,16 +60,29 @@ function Segmented({ options, value, onChange }) {
 export default function FilterBar({
     days,
     minScore,
+    session,
+    size,
     query,
+    buckets,
     onDays,
     onMinScore,
+    onSession,
+    onSize,
     onQuery,
     onRefresh,
     refreshing
 }) {
+    const sizes = buckets?.length
+        ? [{ label: "Any size", value: "ALL" }].concat(
+              buckets.map((b) => ({ label: b.label, value: b.key }))
+          )
+        : DEFAULT_SIZES;
+
     return (
         <div className="flex flex-wrap items-center gap-3">
             <Segmented options={WINDOWS} value={days} onChange={onDays} />
+            <Segmented options={SESSIONS} value={session} onChange={onSession} />
+            <Segmented options={sizes} value={size} onChange={onSize} />
             <Segmented options={BANDS} value={minScore} onChange={onMinScore} />
 
             <div className="relative min-w-[160px] flex-1">
