@@ -247,6 +247,86 @@ def test_the_daily_cap_is_small_because_the_gate_is_narrow():
     assert 0 < config.PAPER_MAX_PER_DAY <= 5
 
 
+class _Parked(Exception):
+    """Raised by a stubbed sleep to prove the process parked rather than exited."""
+
+
+def test_being_disabled_parks_the_process_instead_of_exiting_it():
+    """
+    The one that took the site down.
+
+    This service is OFF by default, so "disabled" is the path that actually
+    runs in production. It used to return from main(), and a container that
+    exits cleanly under `restart: always` is restarted immediately, exits
+    again, and keeps going - a restart storm against the Docker daemon that
+    every other container on the box shares.
+
+    Exiting is only correct for --once. The daemon must idle.
+    """
+    import sys
+    saved_argv = sys.argv
+    saved_sleep = papertrader.time.sleep
+    saved_enabled = config.PAPER_TRADING_ENABLED
+    slept = []
+    try:
+        config.PAPER_TRADING_ENABLED = False
+        sys.argv = ["papertrader.py"]
+
+        def parked(sec):
+            slept.append(sec)
+            raise _Parked()
+
+        papertrader.time.sleep = parked
+        try:
+            papertrader.main()
+            raise AssertionError(
+                "main() returned with trading disabled - the container will "
+                "exit and be restarted forever")
+        except _Parked:
+            pass
+        assert slept and slept[0] >= 60, (
+            "parked, but on a short sleep: {}".format(slept))
+    finally:
+        sys.argv = saved_argv
+        papertrader.time.sleep = saved_sleep
+        config.PAPER_TRADING_ENABLED = saved_enabled
+
+
+def test_once_still_exits_when_disabled():
+    """--once is a command, not a daemon: it must return, not hang."""
+    import sys
+    saved_argv = sys.argv
+    saved_enabled = config.PAPER_TRADING_ENABLED
+    saved_sleep = papertrader.time.sleep
+    try:
+        config.PAPER_TRADING_ENABLED = False
+        sys.argv = ["papertrader.py", "--once"]
+        papertrader.time.sleep = lambda s: (_ for _ in ()).throw(
+            AssertionError("--once slept instead of returning"))
+        papertrader.main()
+    finally:
+        sys.argv = saved_argv
+        config.PAPER_TRADING_ENABLED = saved_enabled
+        papertrader.time.sleep = saved_sleep
+
+
+def test_the_compose_service_cannot_restart_on_a_clean_exit():
+    """
+    Belt and braces for the above: even if something exits cleanly again,
+    `restart: always` would loop it. The policy must be bounded.
+    """
+    import os
+    import yaml
+    here = os.path.dirname(os.path.abspath(papertrader.__file__))
+    path = os.path.join(os.path.dirname(here), "docker-compose.yml")
+    if not os.path.exists(path):
+        return
+    svc = yaml.safe_load(open(path, encoding="utf-8"))["services"]["alert-paper"]
+    assert str(svc.get("restart", "")).startswith("on-failure"), (
+        "alert-paper restart policy is {!r}; `always` restarts a clean "
+        "exit forever".format(svc.get("restart")))
+
+
 def test_it_uses_the_same_gate_as_the_shadow_record():
     """
     One gate, so the paper trades and the shadow record measure the same thing.

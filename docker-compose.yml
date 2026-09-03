@@ -204,7 +204,11 @@ services:
       context: .
       dockerfile: engine/Dockerfile
     container_name: alert_paper
-    restart: always
+    # on-failure, NOT always. This service is off unless the flag is set, and
+    # `always` restarts a container that exits CLEANLY - which is the default
+    # path here. That storm is what took the stack down on 3 Sep. Bounded
+    # retries mean a genuine crash still recovers and nothing can loop forever.
+    restart: on-failure:5
     command: python papertrader.py
     environment:
       - STANDALONE=true

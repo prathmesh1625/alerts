@@ -39,6 +39,12 @@ import megabull
 import trader
 
 
+# How long to sleep between "still disabled" checks. Nothing depends on it
+# being short - the flag is only read at startup - so it exists to keep the
+# process parked rather than exiting. See main().
+IDLE_SLEEP_SEC = 3600
+
+
 def _log(msg):
     print("[paper] {}".format(msg), flush=True)
 
@@ -198,8 +204,19 @@ def main():
     if args.status:
         show_status()
         return
+
     if not _preflight():
-        return
+        if args.once:
+            return
+        # Do NOT exit here. Under `restart: always` a container that exits
+        # cleanly is restarted at once, exits again, and keeps doing it - a
+        # restart storm against the Docker daemon that the whole stack shares.
+        # This service is off by default, so that is the DEFAULT path, and it
+        # took the site down the first time it ran. Idle instead: inert is not
+        # the same as thrashing.
+        _log("idling - set ALERT_PAPER_TRADING_ENABLED=true and redeploy")
+        while True:
+            time.sleep(IDLE_SLEEP_SEC)
 
     db.ensure_schema()
     if args.once:
