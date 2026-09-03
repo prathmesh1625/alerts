@@ -24,10 +24,17 @@ Two constraints from the docs shape everything here:
     ordinary accounts. So a session is a daily, human act — anything built on
     top must expect to find no valid token and say so plainly rather than fail
     obscurely.
-  * "never expose your api_secret ... do not expose the access_token". The
-    secret is read from the environment and never stored, logged or returned;
-    the access_token is stored because it must be, and is never returned by
-    any endpoint. Nothing here prints either.
+  * "never expose your api_secret ... do not expose the access_token". Neither
+    is written anywhere. The secret is read from the environment; the session
+    lives in this process's memory and is never persisted, returned by any
+    endpoint, or logged.
+
+    Not persisting the token is the point rather than an omission. It is a
+    bearer credential for the WHOLE Kite API, order placement included,
+    whatever this code can do — so a stored one sits in every database backup
+    and volume snapshot as a live trading credential. Keeping it in memory
+    costs a re-login after a redeploy, and the token dies at 06:00 daily
+    regardless.
 
 Uses `requests` rather than the pykiteconnect SDK: one less dependency, and the
 SDK's surface includes order placement, which this stage must not have.
@@ -38,7 +45,6 @@ import hashlib
 import requests
 
 import config
-import db
 
 BASE = "https://api.kite.trade"
 LOGIN = "https://kite.zerodha.com/connect/login"
@@ -46,6 +52,20 @@ IST = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
 
 # Kite wants its version pinned on every call.
 _HEADERS = {"X-Kite-Version": "3"}
+
+
+# The session lives in THIS PROCESS ONLY and is never written anywhere.
+#
+# An access_token is a bearer credential for the whole Kite API, order
+# placement included, regardless of what this code can do. Persisting one puts
+# a live trading credential in a database backup, in a volume snapshot, and in
+# anything that can read either. It bought nothing: the token dies at 06:00 IST
+# daily and the login is already a manual act, so the only cost of keeping it
+# in memory is re-logging-in after a redeploy.
+#
+# If a background worker ever needs a session, this is the decision to revisit
+# deliberately - not by quietly adding a table.
+_SESSION = {}
 
 
 class KiteError(Exception):
@@ -129,13 +149,11 @@ def exchange(request_token: str) -> dict:
         raise KiteError("Kite returned no access_token")
 
     expires = token_expiry()
-    db.save_kite_session({
+    _SESSION.clear()
+    _SESSION.update({
         "user_id": data.get("user_id"),
         "user_name": data.get("user_name"),
-        "email": data.get("email"),
         "access_token": token,
-        "public_token": data.get("public_token"),
-        "login_time": data.get("login_time"),
         "expires_at": expires,
     })
     _log("session established for {} until {} IST".format(
@@ -147,18 +165,14 @@ def exchange(request_token: str) -> dict:
 
 
 def session():
-    """The stored session if it is still valid, else None."""
-    try:
-        row = db.fetch_kite_session()
-    except Exception as e:
-        _log("cannot read session: {}".format(e))
+    """The in-memory session if it is still valid, else None."""
+    if not _SESSION:
         return None
-    if not row:
-        return None
-    expires = row.get("expires_at")
+    expires = _SESSION.get("expires_at")
     if expires and expires <= datetime.datetime.now(expires.tzinfo or IST):
+        _SESSION.clear()
         return None
-    return row
+    return dict(_SESSION)
 
 
 def status() -> dict:
@@ -174,7 +188,9 @@ def status() -> dict:
     s = session()
     if not s:
         return {"configured": True, "live": False,
-                "reason": "no valid session - a human must log in again",
+                "reason": "no valid session - a human must log in again "
+                          "(sessions are held in memory and do not survive a "
+                          "restart, by design)",
                 "login_url": login_url()}
     return {
         "configured": True,
@@ -238,6 +254,6 @@ def logout() -> bool:
                         timeout=20)
     except Exception as e:
         _log("remote logout failed, clearing locally anyway: {}".format(e))
-    db.clear_kite_session()
+    _SESSION.clear()
     _log("session cleared")
     return True

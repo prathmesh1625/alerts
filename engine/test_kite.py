@@ -105,26 +105,43 @@ def test_six_exactly_rolls_to_the_next_day():
     assert kite.token_expiry(t).day == 4
 
 
+def _set_session(**kw):
+    kite._SESSION.clear()
+    kite._SESSION.update(kw)
+
+
 def test_an_expired_session_reads_as_no_session():
-    saved = db.fetch_kite_session
+    _set_session(access_token="x",
+                 expires_at=datetime.datetime.now(kite.IST)
+                 - datetime.timedelta(hours=1))
     try:
-        db.fetch_kite_session = lambda: {
-            "access_token": "x",
-            "expires_at": datetime.datetime.now(kite.IST) - datetime.timedelta(hours=1)}
         assert kite.session() is None
+        assert kite._SESSION == {}, "an expired session must be discarded"
     finally:
-        db.fetch_kite_session = saved
+        kite._SESSION.clear()
 
 
 def test_a_live_session_reads_as_live():
-    saved = db.fetch_kite_session
+    _set_session(access_token="x", user_id="AB1234",
+                 expires_at=datetime.datetime.now(kite.IST)
+                 + datetime.timedelta(hours=5))
     try:
-        db.fetch_kite_session = lambda: {
-            "access_token": "x", "user_id": "AB1234",
-            "expires_at": datetime.datetime.now(kite.IST) + datetime.timedelta(hours=5)}
         assert kite.session() is not None
     finally:
-        db.fetch_kite_session = saved
+        kite._SESSION.clear()
+
+
+def test_the_token_is_never_written_to_the_database():
+    """
+    The reason it is held in memory. An access_token can place orders through
+    Kite whatever this code can do, so a persisted one is a live trading
+    credential sitting in every backup.
+    """
+    src = open(kite.__file__, encoding="utf-8").read()
+    assert "import db" not in src, "kite.py must not touch the database"
+    schema = db.SCHEMA_SQL.lower()
+    assert "kite_session" not in schema
+    assert "access_token" not in schema
 
 
 # -----------------------------------------------------------------------------
@@ -132,21 +149,17 @@ def test_a_live_session_reads_as_live():
 # -----------------------------------------------------------------------------
 
 def test_status_never_carries_a_token():
-    """
-    /api/kite/status is served publicly. Kite's docs are explicit that the
-    access_token must not be exposed.
-    """
-    saved = db.fetch_kite_session
+    """Kite's docs are explicit that the access_token must not be exposed."""
+    _set_session(access_token="SECRET-TOKEN-VALUE", user_id="AB1234",
+                 expires_at=datetime.datetime.now(kite.IST)
+                 + datetime.timedelta(hours=5))
     try:
-        db.fetch_kite_session = lambda: {
-            "access_token": "SECRET-TOKEN-VALUE", "user_id": "AB1234",
-            "expires_at": datetime.datetime.now(kite.IST) + datetime.timedelta(hours=5)}
         with Cfg():
             body = repr(kite.status())
         assert "SECRET-TOKEN-VALUE" not in body, body
         assert "testsecret" not in body, body
     finally:
-        db.fetch_kite_session = saved
+        kite._SESSION.clear()
 
 
 def test_status_without_credentials_says_so_rather_than_crashing():
@@ -156,11 +169,11 @@ def test_status_without_credentials_says_so_rather_than_crashing():
     assert "not set" in st["reason"]
 
 
-def test_the_api_secret_is_never_persisted():
-    """It belongs in the environment only; the schema must have no column for it."""
-    import inspect
-    schema = inspect.getsource(db).lower()
-    assert "api_secret" not in schema.split("create table if not exists kite_session")[1][:800]
+def test_no_credential_has_a_column_anywhere():
+    """Neither the secret nor the token belongs in the database."""
+    schema = db.SCHEMA_SQL.lower()
+    for name in ("api_secret", "access_token", "public_token", "kite_session"):
+        assert name not in schema, name
 
 
 def test_an_exchange_failure_reports_the_reason_not_the_token():
@@ -197,18 +210,14 @@ def test_a_missing_request_token_is_refused_clearly():
 
 
 def test_reads_refuse_without_a_session_rather_than_sending_a_blank_token():
-    saved = db.fetch_kite_session
-    try:
-        db.fetch_kite_session = lambda: None
-        with Cfg():
-            for fn in (kite.profile, lambda: kite.margins("equity")):
-                try:
-                    fn()
-                    assert False, "should have raised"
-                except kite.KiteError as e:
-                    assert "session" in str(e).lower()
-    finally:
-        db.fetch_kite_session = saved
+    kite._SESSION.clear()
+    with Cfg():
+        for fn in (kite.profile, lambda: kite.margins("equity")):
+            try:
+                fn()
+                assert False, "should have raised"
+            except kite.KiteError as e:
+                assert "session" in str(e).lower()
 
 
 def test_an_unknown_margin_segment_is_refused():

@@ -266,25 +266,6 @@ CREATE INDEX IF NOT EXISTS idx_paper_trades_decided
 CREATE INDEX IF NOT EXISTS idx_paper_trades_symbol
     ON paper_trades(company_symbol, decided_at DESC);
 
--- The current Kite session. At most one row: a new login replaces the old.
---
--- The access_token is stored because every request has to be signed with it
--- and it cannot be derived again from anything else. It is never returned by
--- any endpoint and never logged. The api_secret is NOT here and never touches
--- the database - it lives only in the environment.
-CREATE TABLE IF NOT EXISTS kite_session (
-    id           INTEGER PRIMARY KEY DEFAULT 1,
-    user_id      VARCHAR(20),
-    user_name    TEXT,
-    email        TEXT,
-    access_token TEXT NOT NULL,
-    public_token TEXT,
-    login_time   TEXT,
-    expires_at   TIMESTAMPTZ,
-    created_at   TIMESTAMPTZ DEFAULT NOW(),
-    CONSTRAINT kite_session_single_row CHECK (id = 1)
-);
-
 -- Company size, in rupees crore, cached per symbol. Fetched lazily for the
 -- handful of symbols about to alert rather than for the whole market, and
 -- refreshed on a TTL. See marketcap.py for why BSE is the source.
@@ -891,40 +872,6 @@ def count_notified_today(phone: str) -> int:
             (phone, 1),
         )
         return int(cur.fetchone()["n"])
-
-
-def save_kite_session(row: dict) -> None:
-    """Store the session, replacing any previous one."""
-    sql = """
-        INSERT INTO kite_session (id, user_id, user_name, email, access_token,
-                                  public_token, login_time, expires_at, created_at)
-        VALUES (1, %(user_id)s, %(user_name)s, %(email)s, %(access_token)s,
-                %(public_token)s, %(login_time)s, %(expires_at)s, NOW())
-        ON CONFLICT (id) DO UPDATE SET
-            user_id      = EXCLUDED.user_id,
-            user_name    = EXCLUDED.user_name,
-            email        = EXCLUDED.email,
-            access_token = EXCLUDED.access_token,
-            public_token = EXCLUDED.public_token,
-            login_time   = EXCLUDED.login_time,
-            expires_at   = EXCLUDED.expires_at,
-            created_at   = NOW()
-    """
-    with get_cursor(dict_rows=False) as cur:
-        cur.execute(sql, row)
-
-
-def fetch_kite_session():
-    """The stored session, or None. Caller checks expiry."""
-    with get_cursor() as cur:
-        cur.execute("SELECT * FROM kite_session WHERE id = 1")
-        row = cur.fetchone()
-        return dict(row) if row else None
-
-
-def clear_kite_session() -> None:
-    with get_cursor() as cur:
-        cur.execute("DELETE FROM kite_session WHERE id = 1")
 
 
 def fetch_untraded_alerts(days: int, limit: int) -> list:

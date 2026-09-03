@@ -145,17 +145,16 @@ def test_no_endpoint_returns_the_access_token():
     if _skip():
         return
     import datetime
-    import db
 
-    saved_fetch = db.fetch_kite_session
     saved_margins = kite_api.margins
     try:
-        db.fetch_kite_session = lambda: {
+        kite_api._SESSION.clear()
+        kite_api._SESSION.update({
             "access_token": "SECRET-TOKEN-VALUE",
             "user_id": "AB1234",
             "expires_at": datetime.datetime.now(kite_api.IST)
             + datetime.timedelta(hours=5),
-        }
+        })
         kite_api.margins = lambda segment="equity": {
             "equity": {"net": 99725.05, "available": {"cash": 245431.6}}}
 
@@ -166,7 +165,7 @@ def test_no_endpoint_returns_the_access_token():
                 assert "SECRET-TOKEN-VALUE" not in body, path
                 assert "s3cret" not in body, path
     finally:
-        db.fetch_kite_session = saved_fetch
+        kite_api._SESSION.clear()
         kite_api.margins = saved_margins
 
 
