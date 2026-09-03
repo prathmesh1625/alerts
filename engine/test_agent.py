@@ -703,6 +703,84 @@ def test_resolve_handles_empty_path():
 
 # -----------------------------------------------------------------------------
 
+# -----------------------------------------------------------------------------
+#  One order announced twice must alert once
+#
+#  The cross-exchange dedup matches DOCUMENTS by fingerprint, so it catches the
+#  same PDF from both exchanges and nothing else. CEIGALL announced the same
+#  Rs 225 Cr order on BSE at 10:34 and NSE at 10:40, the same Rs 704.70 Cr as an
+#  intimation and again as a press release, and the same Rs 608.67 Cr eight days
+#  apart. Three duplicate pairs the fingerprint could not see.
+# -----------------------------------------------------------------------------
+
+ORDER_CASE = (
+    ["The Company has received a Letter of Award from NTPC Limited.",
+     "The value of the order is Rs. 412.50 crore excluding GST."],
+    dict(company_name="Test Company Limited",
+         document_type="ORDER_WIN",
+         orders=[OrderWin(unit="crore", raw_value=412.5, customer="NTPC Limited",
+                          scope="Supply of solar modules")],
+         evidence=["The value of the order is Rs. 412.50 crore"]),
+)
+
+
+def test_a_repeat_of_the_same_order_does_not_alert_again():
+    import datetime
+    saved = db_module.duplicate_order_alert
+    try:
+        db_module.duplicate_order_alert = lambda sym, val, days, exclude=None: {
+            "announcement_id": 111,
+            "announced_at": datetime.datetime(2026, 8, 21, 10, 34),
+            "exchange": "BSE",
+            "headline": "Order win Rs 412.50 Cr",
+        }
+        rec, msg = run_case(*ORDER_CASE, title="Bagging/Receiving of orders/contracts")
+        assert len(rec.alerts) == 0, "the same order alerted twice"
+        assert "already alerted" in msg, msg
+    finally:
+        db_module.duplicate_order_alert = saved
+
+
+def test_a_different_order_from_the_same_company_still_alerts():
+    """
+    The counterpart risk. CEIGALL won Rs 225 Cr, Rs 704.70 Cr and Rs 5,300 Cr
+    inside two weeks, all genuinely different orders.
+    """
+    saved = db_module.duplicate_order_alert
+    try:
+        db_module.duplicate_order_alert = lambda sym, val, days, exclude=None: None
+        rec, msg = run_case(*ORDER_CASE, title="Bagging/Receiving of orders/contracts")
+        assert len(rec.alerts) == 1, "a genuinely new order was suppressed"
+    finally:
+        db_module.duplicate_order_alert = saved
+
+
+def test_the_duplicate_check_matches_on_value_within_a_tolerance():
+    """
+    One document says "Rs 704.70 crore", another "Rs 704.7 crore". A 1% band
+    absorbs that without letting two genuinely different orders collide.
+    """
+    import inspect
+    src = inspect.getsource(db_module.duplicate_order_alert)
+    assert "0.99" in src and "1.01" in src
+    assert "company_symbol = %s" in src, "must be scoped to one company"
+
+
+def test_the_duplicate_window_can_be_switched_off():
+    saved_cfg = config.DUPLICATE_ORDER_DAYS
+    saved = db_module.duplicate_order_alert
+    called = []
+    try:
+        config.DUPLICATE_ORDER_DAYS = 0
+        db_module.duplicate_order_alert = lambda *a, **k: called.append(1)
+        rec, _ = run_case(*ORDER_CASE, title="Receipt of Order")
+        assert not called, "checked even though the window is disabled"
+        assert len(rec.alerts) == 1
+    finally:
+        config.DUPLICATE_ORDER_DAYS = saved_cfg
+        db_module.duplicate_order_alert = saved
+
+
 if __name__ == "__main__":
     passed = failed = 0
     for name, fn in sorted(globals().items()):

@@ -252,6 +252,25 @@ def process_filing(filing: dict) -> str:
                 symbol, result["score"], config.ALERT_MIN_SCORE
             )
 
+        # The same order announced twice. Checked here rather than in the
+        # formula: the filing genuinely IS an order win and should be recorded
+        # as analysed - it is the ALERT that would be a repeat.
+        if config.DUPLICATE_ORDER_DAYS > 0 and result.get("order_value_cr"):
+            try:
+                prior = db.duplicate_order_alert(
+                    symbol, result["order_value_cr"],
+                    config.DUPLICATE_ORDER_DAYS, ann_id)
+            except Exception as e:
+                prior = None
+                print("[agent] duplicate check failed for {}: {}".format(symbol, e),
+                      file=sys.stderr)
+            if prior:
+                return "{} ---   same order already alerted on {} ({})".format(
+                    symbol,
+                    prior["announced_at"].strftime("%d %b %H:%M")
+                    if hasattr(prior["announced_at"], "strftime") else prior["announced_at"],
+                    prior.get("exchange") or "?")
+
         db.save_alert({
             "announcement_id": ann_id,
             "company_symbol": symbol,

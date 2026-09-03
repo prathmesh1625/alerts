@@ -452,6 +452,18 @@ PREFILTER_ENABLED = _bool("PREFILTER_ENABLED", True)
 # the document — more thorough, several times the CPU.
 SKIP_BY_TITLE = _bool("SKIP_BY_TITLE", True)
 
+# One order, announced more than once, should alert once.
+#
+# The cross-exchange dedup matches documents by fingerprint, so it only catches
+# the identical PDF from both exchanges. CEIGALL announced the same Rs 225 Cr
+# order on BSE and NSE six minutes apart, the same Rs 704.70 Cr as an
+# intimation and then as a press release, and the same Rs 608.67 Cr eight days
+# apart - three duplicate pairs the fingerprint could not see.
+#
+# Matching on symbol + order VALUE catches them: a company does not win two
+# different orders for the same amount inside a few days. Set to 0 to disable.
+DUPLICATE_ORDER_DAYS = _int("DUPLICATE_ORDER_DAYS", 10)
+
 # Alerts older than this stop showing on the dashboard's default view.
 ALERT_TTL_DAYS = _int("ALERT_TTL_DAYS", 5)
 

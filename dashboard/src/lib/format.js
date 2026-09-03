@@ -79,3 +79,32 @@ export const RULE_LABELS = {
     REVENUE_GROWTH: "Revenue growth",
     ORDER_WIN: "Order win"
 };
+
+
+// The clock time an alert reached the dashboard, in IST. `created_at` is
+// tz-aware from Postgres, so the browser renders it in the viewer's zone —
+// pinned to IST here so it lines up with the exchange timestamp beside it.
+export function shortTime(iso) {
+    if (!iso) return "";
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return "";
+    return d.toLocaleTimeString("en-IN", {
+        hour: "2-digit", minute: "2-digit", hour12: true,
+        timeZone: "Asia/Kolkata"
+    });
+}
+
+// How long the alert took to arrive. announced_at is naive IST from the
+// exchange; created_at is tz-aware. Parsing the first as UTC and correcting by
+// 5h30m is what keeps the subtraction honest across a viewer's timezone.
+export function alertDelay(alert) {
+    if (!alert?.announced_at || !alert?.created_at) return "";
+    const announced = new Date(alert.announced_at + "Z").getTime() - 5.5 * 3600 * 1000;
+    const seen = new Date(alert.created_at).getTime();
+    const secs = Math.round((seen - announced) / 1000);
+    if (!Number.isFinite(secs) || secs < 0 || secs > 86400 * 7) return "";
+    if (secs < 90) return `${secs}s after the exchange`;
+    const mins = Math.round(secs / 60);
+    if (mins < 90) return `${mins} min after the exchange`;
+    return `${Math.round(mins / 60)} h after the exchange`;
+}

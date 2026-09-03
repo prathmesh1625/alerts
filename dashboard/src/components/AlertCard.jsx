@@ -5,7 +5,9 @@ import {
     formatCr,
     formatDateTime,
     formatPct,
-    timeAgo
+    timeAgo,
+    shortTime,
+    alertDelay
 } from "../lib/format.js";
 import { pdfUrl } from "../lib/api.js";
 
@@ -117,6 +119,14 @@ export default function AlertCard({ alert }) {
                         <div className="font-mono text-xs text-brand-textMuted">
                             {timeAgo(alert.announced_at)}
                         </div>
+                        {alert.created_at && (
+                            <div
+                                className="font-mono text-[10px] text-brand-textMuted/70"
+                                title={`Exchange stamped it ${formatDateTime(alert.announced_at)}; it reached the dashboard ${formatDateTime(alert.created_at)}`}
+                            >
+                                on board {shortTime(alert.created_at)}
+                            </div>
+                        )}
                         <div className="mt-1 flex items-center justify-end gap-1.5 text-[10px] uppercase tracking-wider text-brand-textMuted">
                             {alert.exchange && (
                                 <span className="rounded border border-brand-border px-1 py-px">
@@ -275,7 +285,13 @@ export default function AlertCard({ alert }) {
                                 ["Filing", alert.title],
                                 ["Period", alert.reporting_period],
                                 ["Basis", alert.basis],
-                                ["Announced", formatDateTime(alert.announced_at)]
+                                ["Announced", formatDateTime(alert.announced_at)],
+                                // When it reached the dashboard, next to when the
+                                // exchange stamped it. The gap between the two is
+                                // mostly the exchange's own publishing delay - one
+                                // measured NSE sample was 131s of a 158s median.
+                                ["On dashboard", formatDateTime(alert.created_at)],
+                                ["Delay", alertDelay(alert)]
                             ]
                                 .filter(([, v]) => v)
                                 .map(([k, v]) => (

@@ -759,6 +759,40 @@ def fetch_near_misses(days: int, limit: int = 100) -> list:
         return [dict(r) for r in cur.fetchall()]
 
 
+def duplicate_order_alert(symbol, order_value_cr, days, exclude_id=None):
+    """
+    An earlier alert for the same symbol and the same order value, or None.
+
+    The cross-exchange dedup matches DOCUMENTS by fingerprint, so it catches
+    the same PDF from both exchanges and nothing else. One order announced
+    three ways still alerts three times: CEIGALL's Rs 225 Cr went out on BSE at
+    10:34 and NSE at 10:40, its Rs 704.70 Cr as an intimation and again as a
+    press release, and its Rs 608.67 Cr eight days apart.
+
+    Matching on the VALUE catches all of those, because a company does not win
+    two different orders for the same amount within a few days. A 1% tolerance
+    absorbs rounding between one document's wording and another's.
+    """
+    if not order_value_cr:
+        return None
+    lo = float(order_value_cr) * 0.99
+    hi = float(order_value_cr) * 1.01
+    sql = """
+        SELECT announcement_id, announced_at, exchange, headline
+          FROM stock_alerts
+         WHERE company_symbol = %s
+           AND order_value_cr BETWEEN %s AND %s
+           AND announced_at >= (timezone('Asia/Kolkata', now())
+                                - (%s * INTERVAL '1 day'))
+           AND (%s IS NULL OR announcement_id <> %s)
+      ORDER BY announced_at ASC LIMIT 1
+    """
+    with get_cursor() as cur:
+        cur.execute(sql, (symbol.upper(), lo, hi, days, exclude_id, exclude_id))
+        row = cur.fetchone()
+        return dict(row) if row else None
+
+
 def save_alert(alert: dict) -> None:
     sql = """
         INSERT INTO stock_alerts (
