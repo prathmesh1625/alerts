@@ -478,7 +478,7 @@ PRICE_BASELINE_MAX_BACKTRACK = _int("PRICE_BASELINE_MAX_BACKTRACK", 7)
 #
 #  trader.py records what it WOULD buy. There is no code in this repo that can
 #  place an order, and these values do not change that; they decide what gets
-#  recorded. Wiring Kite is a separate change, deliberately not made yet.
+#  recorded. Connecting a broker is a separate change, not made.
 #
 #  The gate: STRONG, a large order, AND an order large RELATIVE to the company.
 #  The third condition is what makes the first two mean anything. Over 30 days
@@ -507,25 +507,16 @@ TRADE_POLL_SEC = _int("TRADE_POLL_SEC", 20)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  Zerodha Kite Connect — AUTH AND READ ONLY
-#
-#  Nothing here enables order placement; no such code exists in this repo.
-#
-#  The secret is read from the environment and never stored, logged or
-#  returned, per Kite's own warning. The access_token it produces expires at
-#  06:00 IST the next day by regulation and cannot be refreshed, so a session
-#  is a daily human act rather than something the service can maintain.
+#  Access control
 # ─────────────────────────────────────────────────────────────────────────────
 # Gate for endpoints that must never be public. The dashboard's alert data is
-# served openly and always has been; account funds, the Kite session and the
-# trading record are a different category and are not.
+# served openly and always has been; the trading record is a different
+# category and is not.
 #
 # FAIL CLOSED: if this is unset, those endpoints refuse to serve at all rather
 # than serving to everyone. An empty admin token must never mean "no checks".
 ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "")
 
-KITE_API_KEY = os.getenv("KITE_API_KEY", "")
-KITE_API_SECRET = os.getenv("KITE_API_SECRET", "")
 
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -4,7 +4,8 @@ trader.py — decides which alerts WOULD be traded, and records the decision.
 SHADOW MODE ONLY. This module contains no code that can place an order. That is
 deliberate and it is the whole point of this stage: not a flag that could be
 flipped by accident, but no execution path to flip. Placing real orders through
-Kite is a separate change, to be made once there is shadow data worth acting on.
+a broker is a separate change, to be made once there is shadow data worth
+acting on.
 
 Why that sequencing. Over five days of live filings this engine produced, and
 then had fixed: a deposit programme read as a Rs 35,000 Cr order, a TERMINATED

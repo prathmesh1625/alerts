@@ -1,7 +1,6 @@
 import React, { useCallback, useEffect, useState } from "react";
 
 import {
-    fetchKiteStatus,
     fetchLatency,
     fetchNearMisses,
     fetchPaperTrades,
@@ -13,12 +12,12 @@ import {
  * Testing Agent — everything being TRIED, kept away from the alerts view.
  *
  * The alerts page is the thing that works and is watched daily. This is where
- * the unproven parts live: what the trading gate would have bought, whether a
- * broker session is live, which alerts were nearly missed, and where the time
- * goes. Separating them means experimenting here cannot disturb that.
+ * the unproven parts live: what the trading gate would have bought, which
+ * alerts were nearly missed, and where the time goes. Separating them means
+ * experimenting here cannot disturb that.
  *
- * Nothing on this page can place an order. There is no execution code in the
- * repo at all — see engine/trader.py.
+ * There is no broker connected and no execution code anywhere in the repo, so
+ * "would have bought" is the whole of it — see engine/trader.py.
  */
 
 const REFRESH_MS = 30_000;
@@ -48,7 +47,7 @@ function TokenGate({ token, onChange }) {
     return (
         <Panel
             title="Admin token"
-            subtitle="These views touch the broker session and the trading record, so they are not public. The token is stored in this browser only."
+            subtitle="The trading record is not public. The token is stored in this browser only."
         >
             <div className="flex flex-wrap gap-2">
                 <input
@@ -189,61 +188,9 @@ function Trades({ data }) {
     );
 }
 
-function Broker({ status, error }) {
-    if (error) {
-        return (
-            <p className="text-sm text-brand-textMuted">
-                {error.includes("401") || error.includes("403")
-                    ? "Admin token missing or wrong."
-                    : error.includes("503")
-                      ? "Disabled — ALERT_ADMIN_TOKEN is not set on the server."
-                      : error}
-            </p>
-        );
-    }
-    if (!status) return <div className="skeleton h-16 rounded-xl" />;
-
-    if (!status.configured) {
-        return (
-            <p className="text-sm text-brand-textMuted">
-                Kite is not configured, and nothing here needs it. The shadow record
-                builds without it.
-            </p>
-        );
-    }
-    return (
-        <div className="space-y-2 text-sm">
-            <div className="flex items-center gap-2">
-                <span
-                    className={`h-2 w-2 rounded-full ${
-                        status.live ? "bg-band-strong" : "bg-brand-textMuted"
-                    }`}
-                />
-                <span className="text-brand-light">
-                    {status.live ? `Session live · ${status.user_id}` : "No session"}
-                </span>
-            </div>
-            <p className="text-xs text-brand-textMuted">
-                {status.live
-                    ? `Expires ${status.expires_at?.slice(0, 16).replace("T", " ")} — tokens die at 06:00 IST and cannot be refreshed.`
-                    : status.reason}
-            </p>
-            {!status.live && status.login_url && (
-                <a
-                    href={status.login_url}
-                    className="inline-block rounded-lg border border-brand-cyan/40 px-3 py-1.5 text-xs text-brand-cyan hover:bg-brand-cyan/10"
-                >
-                    Log in to Kite
-                </a>
-            )}
-        </div>
-    );
-}
-
 export default function TestingAgent() {
     const [token, setToken] = useState(getAdminToken());
     const [trades, setTrades] = useState(null);
-    const [kite, setKite] = useState(null);
     const [misses, setMisses] = useState(null);
     const [latency, setLatency] = useState(null);
     const [error, setError] = useState(null);
@@ -262,12 +209,7 @@ export default function TestingAgent() {
 
         if (!token) return;
         try {
-            const [t, k] = await Promise.all([
-                fetchPaperTrades({ days: 30 }),
-                fetchKiteStatus().catch(() => null)
-            ]);
-            setTrades(t);
-            setKite(k);
+            setTrades(await fetchPaperTrades({ days: 30 }));
             setError(null);
         } catch (e) {
             setError(e.message);
@@ -293,8 +235,9 @@ export default function TestingAgent() {
                         </h2>
                         <p className="mt-0.5 text-xs leading-relaxed text-brand-textMuted">
                             Everything being tried, kept away from the alerts view so
-                            experimenting here cannot disturb it. Nothing on this page can
-                            place an order — there is no execution code in the engine.
+                            experimenting here cannot disturb it. No broker is connected
+                            and the engine has no execution code, so this only ever
+                            records what a trade WOULD have been.
                         </p>
                     </div>
                     <ShadowBadge />
@@ -328,15 +271,7 @@ export default function TestingAgent() {
                 )}
             </Panel>
 
-            <div className="grid gap-5 lg:grid-cols-2">
-                <Panel title="Broker session" subtitle="Read-only. Auth and margins, no trading.">
-                    {token ? (
-                        <Broker status={kite} error={error} />
-                    ) : (
-                        <p className="text-sm text-brand-textMuted">Token required.</p>
-                    )}
-                </Panel>
-
+            <div className="grid gap-5">
                 <Panel
                     title="Near misses"
                     subtitle="Filings where an order value was read but no alert followed — ₹50 Cr and up."

@@ -302,21 +302,11 @@ services:
       - PDF_CACHE_DIR=/app/pdf_cache
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
 
-      # Kite Connect - AUTH AND READ ONLY. No order placement exists in this
-      # repo. Only the API needs these: it serves the login callback that
-      # exchanges the request_token, and the read-only status and margins
-      # calls. The secret never leaves this process and is never stored.
-      #
-      # The access_token Kite issues expires at 06:00 IST the next day by
-      # regulation and cannot be refreshed, so a session is a daily human act:
-      # visit /api/kite/status for the login link.
-      # Gate for the endpoints that must not be public: account funds, the
-      # Kite session, and the record of what would have been traded. UNSET
-      # means those endpoints refuse to serve at all - never that checks are
-      # off. Generate one with: openssl rand -hex 32
+      # Gate for the endpoints that must not be public - currently the record
+      # of what would have been traded. UNSET means those endpoints refuse to
+      # serve at all, never that checks are off.
+      #   python -c "import secrets; print(secrets.token_hex(32))"
       - ADMIN_TOKEN=${ALERT_ADMIN_TOKEN:-}
-      - KITE_API_KEY=${ALERT_KITE_API_KEY:-}
-      - KITE_API_SECRET=${ALERT_KITE_API_SECRET:-}
     volumes:
       # Read-only: it serves cached PDFs, it must never write to them.
       - alert_pdf_cache:/app/pdf_cache:ro

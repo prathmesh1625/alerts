@@ -65,7 +65,6 @@ export const fetchConfig = () => get("/api/config");
 // alerts view, which stays public and unchanged.
 export const fetchPaperTrades = (params) =>
     get("/api/paper-trades", params, { admin: true });
-export const fetchKiteStatus = () => get("/api/kite/status", {}, { admin: true });
 export const fetchNearMisses = (params) => get("/api/near-misses", params);
 export const fetchLatency = (params) => get("/api/latency", params);
 

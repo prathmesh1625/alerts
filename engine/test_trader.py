@@ -45,7 +45,10 @@ def test_there_is_no_code_that_can_place_an_order():
 
 
 def test_nothing_in_the_engine_imports_a_broker_sdk():
-    """A broker client anywhere in the engine would make the claim above false."""
+    """
+    No broker is connected at all: the session layer that existed briefly was
+    removed. This asserts the engine stays that way rather than drifting back.
+    """
     import glob
     import os
     here = os.path.dirname(os.path.abspath(trader.__file__))
