@@ -99,7 +99,12 @@ function Trades({ data }) {
                     ["Judged", data.count],
                     ["Would buy", data.would_trade],
                     ["Min order", `₹${data.gate?.min_order_cr} Cr`],
-                    ["Min % of m-cap", `${data.gate?.min_order_to_mcap_pct}%`]
+                    [
+                        "Capturable avg",
+                        data.outcome
+                            ? `${data.outcome.capturable_mean_pct > 0 ? "+" : ""}${data.outcome.capturable_mean_pct}%`
+                            : "—"
+                    ]
                 ].map(([label, value]) => (
                     <div
                         key={label}
@@ -125,7 +130,7 @@ function Trades({ data }) {
                     <table className="w-full text-left text-sm">
                         <thead className="text-[10px] uppercase tracking-wider text-brand-textMuted">
                             <tr>
-                                {["Symbol", "Order", "M-cap", "% of co.", "Qty", "Ref price", "Session"].map(
+                                {["Symbol", "% of co.", "20d mom", "Session", "Gap", "Capturable", "Total"].map(
                                     (h) => (
                                         <th key={h} className="pb-2 pr-4 font-medium">
                                             {h}
@@ -140,13 +145,25 @@ function Trades({ data }) {
                                     <td className="py-2 pr-4 text-brand-light">
                                         {t.company_symbol}
                                     </td>
-                                    <td className="py-2 pr-4">₹{t.order_cr} Cr</td>
-                                    <td className="py-2 pr-4">₹{t.market_cap_cr} Cr</td>
                                     <td className="py-2 pr-4 text-brand-cyan">
                                         {t.order_to_mcap_pct}%
                                     </td>
-                                    <td className="py-2 pr-4">{t.quantity ?? "—"}</td>
-                                    <td className="py-2 pr-4">{t.reference_price ?? "—"}</td>
+                                    <td className="py-2 pr-4">
+                                        {t.momentum_20d_pct != null ? (
+                                            <span
+                                                className={
+                                                    t.momentum_20d_pct >= 0
+                                                        ? "text-band-strong"
+                                                        : "text-band-watch"
+                                                }
+                                            >
+                                                {t.momentum_20d_pct > 0 ? "+" : ""}
+                                                {t.momentum_20d_pct}%
+                                            </span>
+                                        ) : (
+                                            "—"
+                                        )}
+                                    </td>
                                     <td className="py-2 pr-4 text-xs">
                                         {t.session_state === "OPEN" ? (
                                             <span className="text-band-strong">open</span>
@@ -158,6 +175,38 @@ function Trades({ data }) {
                                                 {(t.session_state || "").toLowerCase()}
                                             </span>
                                         )}
+                                    </td>
+                                    <td
+                                        className="py-2 pr-4 text-brand-textMuted"
+                                        title="Overnight move — gone before anyone acting on the alert could trade"
+                                    >
+                                        {t.gap_pct != null
+                                            ? `${t.gap_pct > 0 ? "+" : ""}${t.gap_pct}%`
+                                            : "—"}
+                                    </td>
+                                    <td
+                                        className="py-2 pr-4"
+                                        title="Open to close — the only part actually reachable"
+                                    >
+                                        {t.capturable_pct != null ? (
+                                            <span
+                                                className={
+                                                    t.capturable_pct >= 0
+                                                        ? "text-band-strong"
+                                                        : "text-band-watch"
+                                                }
+                                            >
+                                                {t.capturable_pct > 0 ? "+" : ""}
+                                                {t.capturable_pct}%
+                                            </span>
+                                        ) : (
+                                            "pending"
+                                        )}
+                                    </td>
+                                    <td className="py-2 pr-4 text-brand-textMuted">
+                                        {t.total_move_pct != null
+                                            ? `${t.total_move_pct > 0 ? "+" : ""}${t.total_move_pct}%`
+                                            : "—"}
                                     </td>
                                 </tr>
                             ))}
@@ -248,7 +297,7 @@ export default function TestingAgent() {
 
             <Panel
                 title="What it would have bought"
-                subtitle="STRONG conviction, order ≥ ₹100 Cr, and worth ≥ 10% of market cap. Recorded, never executed."
+                subtitle="STRONG, order ≥ ₹100 Cr, ≥ 10% of market cap. Capturable is open-to-close — the only part reachable; a big total that was mostly overnight gap was never available."
                 right={
                     token && (
                         <button

@@ -185,6 +185,38 @@ services:
           cpus: "0.15"
           memory: 192M
 
+  # --- measures what happened after each alert -------------------------------
+  #
+  # Fills in what the stock was doing BEFORE an alert and what it did after,
+  # split into the overnight gap and the part actually reachable by someone
+  # acting on the alert. Slow on purpose: the answer only exists once NSE
+  # publishes the next session's Bhavcopy.
+  alert-outcomes:
+    build:
+      context: .
+      dockerfile: engine/Dockerfile
+    container_name: alert_outcomes
+    restart: always
+    command: python outcomes.py
+    environment:
+      - STANDALONE=true
+      - DB_HOST=alert-db
+      - DB_PORT=5432
+      - DB_NAME=${ALERT_DB_NAME:-alerts}
+      - DB_USER=${ALERT_DB_USER:-alerts}
+      - DB_PASSWORD=${ALERT_DB_PASSWORD:?ALERT_DB_PASSWORD must be set}
+      - OUTCOME_POLL_SEC=${ALERT_OUTCOME_POLL_SEC:-900}
+      # Unused by this process, but config.py reads it at import.
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+    depends_on:
+      alert-db:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: "0.15"
+          memory: 192M
+
   # --- reads the filings worth reading, applies the formula ------------------
   alert-agent:
     build:

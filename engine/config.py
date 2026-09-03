@@ -505,6 +505,13 @@ TRADE_LOOKBACK_DAYS = _int("TRADE_LOOKBACK_DAYS", 3)
 TRADE_BATCH = _int("TRADE_BATCH", 25)
 TRADE_POLL_SEC = _int("TRADE_POLL_SEC", 20)
 
+# Measuring what happened. The outcome of an alert is only knowable after the
+# next session closes and NSE publishes its Bhavcopy, so this runs slowly and
+# looks back far enough to catch decisions made over a weekend.
+OUTCOME_LOOKBACK_DAYS = _int("OUTCOME_LOOKBACK_DAYS", 30)
+OUTCOME_BATCH = _int("OUTCOME_BATCH", 50)
+OUTCOME_POLL_SEC = _int("OUTCOME_POLL_SEC", 900)
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  Access control

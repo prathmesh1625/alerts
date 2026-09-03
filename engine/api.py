@@ -449,6 +449,26 @@ def get_paper_trades(days: int = Query(default=30, ge=1, le=365),
     if taken_only:
         rows = [r for r in rows if r.get("would_trade")]
     taken = [r for r in rows if r.get("would_trade")]
+
+    # Capturable is the honest number: the open-to-close part, which is all
+    # anyone acting on the alert could have taken. A large TOTAL move that was
+    # mostly overnight gap was never available - TEJASNET's +7.63% day was
+    # +5.25% gap and +2.26% reachable.
+    measured = [r for r in taken if r.get("capturable_pct") is not None]
+    summary = None
+    if measured:
+        cap = [float(r["capturable_pct"]) for r in measured]
+        gaps = [float(r["gap_pct"]) for r in measured
+                if r.get("gap_pct") is not None]
+        summary = {
+            "measured": len(cap),
+            "capturable_mean_pct": round(sum(cap) / len(cap), 2),
+            "capturable_positive": len([x for x in cap if x > 0]),
+            "gap_mean_pct": round(sum(gaps) / len(gaps), 2) if gaps else None,
+            "caveat": ("capturable = open-to-close, the only part actionable on "
+                       "the alert. Under a few dozen rows this means nothing."),
+        }
+
     return {
         "window_days": days,
         "count": len(rows),
@@ -462,6 +482,7 @@ def get_paper_trades(days: int = Query(default=30, ge=1, le=365),
             "max_per_day": config.TRADE_MAX_PER_DAY,
             "dedup_days": config.TRADE_DEDUP_DAYS,
         },
+        "outcome": summary,
         "trades": rows,
     }
 

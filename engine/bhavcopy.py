@@ -95,6 +95,14 @@ def fetch(session_date):
             "session_date": session_date,
             "close": _num(rec.get("ClsPric")),
             "prev_close": _num(rec.get("PrvsClsgPric")),
+            # The open matters as much as the close for judging an alert. A
+            # filing published after hours is repriced at the OPEN, so the
+            # gap is the part nobody acting on the alert could capture and
+            # open-to-close is the part they could. Measured, TEJASNET's
+            # +7.63% day was +5.25% gap and only +2.26% reachable.
+            "open": _num(rec.get("OpnPric")),
+            "high": _num(rec.get("HghPric")),
+            "low": _num(rec.get("LwPric")),
             "volume": int(volume),
             # TtlTrfVal is in RUPEES; 1 crore = 10,000,000.
             "turnover_cr": round(turnover / 1e7, 4) if turnover else None,

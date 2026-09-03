@@ -209,6 +209,22 @@ ALTER TABLE stock_alerts
     ADD COLUMN IF NOT EXISTS price_6m_ago NUMERIC(16,4);
 ALTER TABLE stock_alerts
     ADD COLUMN IF NOT EXISTS price_change_6m_pct NUMERIC(10,2);
+-- The open is as important as the close for judging an alert: a filing
+-- published after hours is repriced at the OPEN, so the overnight gap is the
+-- part nobody acting on the alert could capture.
+ALTER TABLE daily_volume ADD COLUMN IF NOT EXISTS open NUMERIC(16,4);
+ALTER TABLE daily_volume ADD COLUMN IF NOT EXISTS high NUMERIC(16,4);
+ALTER TABLE daily_volume ADD COLUMN IF NOT EXISTS low  NUMERIC(16,4);
+-- What the stock was doing BEFORE the alert, and what the move actually
+-- looked like after it. Filled in two passes: momentum at decision time,
+-- outcome once the next session has been published.
+ALTER TABLE paper_trades ADD COLUMN IF NOT EXISTS momentum_20d_pct NUMERIC(10,2);
+ALTER TABLE paper_trades ADD COLUMN IF NOT EXISTS momentum_5d_pct  NUMERIC(10,2);
+ALTER TABLE paper_trades ADD COLUMN IF NOT EXISTS range_position   NUMERIC(6,2);
+ALTER TABLE paper_trades ADD COLUMN IF NOT EXISTS outcome_date     DATE;
+ALTER TABLE paper_trades ADD COLUMN IF NOT EXISTS gap_pct          NUMERIC(10,2);
+ALTER TABLE paper_trades ADD COLUMN IF NOT EXISTS capturable_pct   NUMERIC(10,2);
+ALTER TABLE paper_trades ADD COLUMN IF NOT EXISTS total_move_pct   NUMERIC(10,2);
 CREATE INDEX IF NOT EXISTS idx_filing_analyses_formula
     ON filing_analyses(formula_version) WHERE status = 'ANALYZED';
 -- Rule 4 fires twice for the same session: once intraday off the live feed the
@@ -1185,15 +1201,19 @@ def save_daily_volumes(rows) -> int:
         return 0
     sql = """
         INSERT INTO daily_volume
-            (symbol, session_date, close, prev_close, volume, turnover_cr, trades)
+            (symbol, session_date, close, prev_close, volume, turnover_cr,
+             trades, open, high, low)
         VALUES %s
         ON CONFLICT (symbol, session_date) DO UPDATE SET
             close = EXCLUDED.close, prev_close = EXCLUDED.prev_close,
             volume = EXCLUDED.volume, turnover_cr = EXCLUDED.turnover_cr,
-            trades = EXCLUDED.trades
+            trades = EXCLUDED.trades, open = EXCLUDED.open,
+            high = EXCLUDED.high, low = EXCLUDED.low
     """
+    # .get on the OHLC keys: a caller predating them still writes cleanly.
     values = [(r["symbol"], r["session_date"], r["close"], r["prev_close"],
-               r["volume"], r["turnover_cr"], r["trades"]) for r in rows]
+               r["volume"], r["turnover_cr"], r["trades"],
+               r.get("open"), r.get("high"), r.get("low")) for r in rows]
     with get_cursor(dict_rows=False) as cur:
         psycopg2.extras.execute_values(cur, sql, values, page_size=1000)
     return len(values)
@@ -1337,6 +1357,51 @@ def fetch_volume_alerts(days: int, min_score: float = 0.0, symbol=None,
     with get_cursor() as cur:
         cur.execute(sql, params)
         return [dict(r) for r in cur.fetchall()]
+
+
+def sessions_for(symbol, before_date, limit=25):
+    """The last `limit` sessions for a symbol strictly before a date, oldest first."""
+    with get_cursor() as cur:
+        cur.execute(
+            "SELECT session_date, open, high, low, close, prev_close, volume "
+            "FROM daily_volume WHERE symbol = %s AND session_date < %s "
+            "AND close IS NOT NULL ORDER BY session_date DESC LIMIT %s",
+            (symbol.upper(), before_date, limit))
+        return list(reversed([dict(r) for r in cur.fetchall()]))
+
+
+def first_session_on_or_after(symbol, date):
+    """The first session for a symbol on or after a date, or None."""
+    with get_cursor() as cur:
+        cur.execute(
+            "SELECT session_date, open, high, low, close, prev_close "
+            "FROM daily_volume WHERE symbol = %s AND session_date >= %s "
+            "AND close IS NOT NULL ORDER BY session_date ASC LIMIT 1",
+            (symbol.upper(), date))
+        row = cur.fetchone()
+        return dict(row) if row else None
+
+
+def fetch_trades_awaiting_outcome(days, limit=50):
+    """Recorded decisions whose post-alert session has not been measured yet."""
+    with get_cursor() as cur:
+        cur.execute(
+            "SELECT p.*, a.announced_at FROM paper_trades p "
+            "JOIN stock_alerts a ON a.announcement_id = p.announcement_id "
+            "WHERE p.outcome_date IS NULL "
+            "AND p.decided_at >= NOW() - (%s * INTERVAL '1 day') "
+            "ORDER BY p.decided_at ASC LIMIT %s", (days, limit))
+        return [dict(r) for r in cur.fetchall()]
+
+
+def update_trade_metrics(trade_id, fields):
+    """Write measured columns onto one recorded decision."""
+    if not fields:
+        return
+    sets = ", ".join("{} = %s".format(k) for k in fields)
+    with get_cursor() as cur:
+        cur.execute("UPDATE paper_trades SET {} WHERE id = %s".format(sets),
+                    list(fields.values()) + [trade_id])
 
 
 def close_on(symbol, session_date):
