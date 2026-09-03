@@ -526,6 +526,44 @@ OUTCOME_POLL_SEC = _int("OUTCOME_POLL_SEC", 900)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+#  Paper trading — MegaBull, VIRTUAL MONEY ONLY
+#
+#  megabull.BASE is a hardcoded constant, so nothing here can point this at a
+#  real broker. These settings decide what gets bought with play money and how
+#  much of it, not whether anything real happens.
+#
+#  The api-key expires after ONE MONTH. It will start failing on a date nobody
+#  is watching for; the client says so plainly rather than retrying.
+#
+#  The gate is deliberately the SAME one the shadow recorder uses, so both are
+#  measuring one thing. At ~8 alerts a day against Rs 5,00,000 of virtual
+#  capital, buying every alert would exhaust the account in a morning.
+# ─────────────────────────────────────────────────────────────────────────────
+PAPER_TRADING_ENABLED = _bool("PAPER_TRADING_ENABLED", False)
+MEGABULL_API_KEY = os.getenv("MEGABULL_API_KEY", "")
+
+# Rs per position. MegaBull accounts start with Rs 5,00,000, so this is about
+# 20 positions before the account is fully deployed.
+PAPER_TRADE_VALUE_INR = _float("PAPER_TRADE_VALUE_INR", 25000.0)
+
+# The gate admits about two a WEEK, so a daily limit being reached means
+# something upstream is wrong rather than that the market got busy.
+PAPER_MAX_PER_DAY = _int("PAPER_MAX_PER_DAY", 3)
+
+# One position per symbol inside this window. SUGSLLOYD announced the same
+# Rs 214.27 Cr order on two consecutive days and alerted both times.
+PAPER_DEDUP_DAYS = _int("PAPER_DEDUP_DAYS", 5)
+
+# Never act on an alert older than this, so switching paper trading on against
+# a populated database does not replay a month of alerts in one pass.
+PAPER_LOOKBACK_HOURS = _int("PAPER_LOOKBACK_HOURS", 6)
+
+PAPER_BATCH = _int("PAPER_BATCH", 20)
+PAPER_POLL_SEC = _int("PAPER_POLL_SEC", 60)
+MEGABULL_INSTRUMENTS_TTL_SEC = _int("MEGABULL_INSTRUMENTS_TTL_SEC", 21600)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 #  Access control
 # ─────────────────────────────────────────────────────────────────────────────
 # Gate for endpoints that must never be public. The dashboard's alert data is

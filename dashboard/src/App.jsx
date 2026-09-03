@@ -4,6 +4,7 @@ import { BrowserRouter, NavLink, Navigate, Route, Routes } from "react-router-do
 import Alerts from "./pages/Alerts.jsx";
 import Filings from "./pages/Filings.jsx";
 import Market from "./pages/Market.jsx";
+import PaperTrading from "./pages/PaperTrading.jsx";
 import TestingAgent from "./pages/TestingAgent.jsx";
 
 /**
@@ -14,6 +15,9 @@ import TestingAgent from "./pages/TestingAgent.jsx";
  *                          it, with the source PDF one click away
  *   /market    live      — NSE prices, volume and turnover, refreshed while you
  *                          watch, with alerted companies flagged
+ *   /paper     trading   — orders actually placed with virtual money on
+ *                          MegaBull's simulator. Real calls, real prices, no
+ *                          real money and no broker.
  *   /testing   agent     — the unproven parts: what the trading gate would have
  *                          bought, the broker session, near misses, timings.
  *                          Deliberately separate, so experimenting there cannot
@@ -42,6 +46,9 @@ function Nav() {
             </NavLink>
             <NavLink to="/testing" className={link}>
                 Testing agent
+            </NavLink>
+            <NavLink to="/paper" className={link}>
+                Paper trading
             </NavLink>
         </nav>
     );
@@ -94,6 +101,7 @@ export default function App() {
                     <Route path="/filings" element={<Filings />} />
                     <Route path="/market" element={<Market />} />
                     <Route path="/testing" element={<TestingAgent />} />
+                    <Route path="/paper" element={<PaperTrading />} />
                     <Route path="*" element={<Navigate to="/" replace />} />
                 </Routes>
 

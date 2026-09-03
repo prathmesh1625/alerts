@@ -20,6 +20,7 @@ from fastapi.responses import FileResponse
 import config
 import db
 import market
+import megabull
 import pdf_fetch
 from agent import resolve_pdf_path
 
@@ -430,6 +431,46 @@ def get_near_misses(days: int = Query(default=7, ge=1, le=90),
 
     out.sort(key=lambda x: -(x["largest_order_cr"] or 0))
     return {"window_days": days, "count": len(out), "near_misses": out}
+
+
+@app.get("/api/paper-orders", dependencies=[Depends(require_admin)])
+def get_paper_orders(days: int = Query(default=30, ge=1, le=365),
+                     limit: int = Query(default=200, ge=1, le=1000)):
+    """
+    Paper orders actually sent to MegaBull's simulator, and the account behind
+    them. Gated: it is a trading record, even a virtual one.
+
+    Distinct from /api/paper-trades, which records what WOULD have been bought
+    and contacts nothing.
+    """
+    rows = _db_call(db.fetch_paper_orders, days, limit)
+    placed = [r for r in rows if r.get("status") == "PLACED"]
+
+    account = None
+    try:
+        account = megabull.status()
+    except Exception as e:
+        account = {"configured": megabull.configured(), "live": False,
+                   "reason": str(e)[:200]}
+
+    deployed = sum((r.get("quantity") or 0) * (r.get("price") or 0) for r in placed)
+    return {
+        "window_days": days,
+        "count": len(rows),
+        "placed": len(placed),
+        "deployed_inr": round(deployed, 2),
+        "mode": "PAPER - virtual money on MegaBull's simulator, nothing real",
+        "account": account,
+        "gate": {
+            "conviction": "STRONG",
+            "min_order_cr": config.TRADE_MIN_ORDER_CR,
+            "min_order_to_mcap_pct": config.TRADE_MIN_ORDER_TO_MCAP_PCT,
+            "per_position_inr": config.PAPER_TRADE_VALUE_INR,
+            "max_per_day": config.PAPER_MAX_PER_DAY,
+            "enabled": config.PAPER_TRADING_ENABLED,
+        },
+        "orders": rows,
+    }
 
 
 @app.get("/api/paper-trades", dependencies=[Depends(require_admin)])

@@ -282,6 +282,30 @@ CREATE INDEX IF NOT EXISTS idx_paper_trades_decided
 CREATE INDEX IF NOT EXISTS idx_paper_trades_symbol
     ON paper_trades(company_symbol, decided_at DESC);
 
+-- Paper orders actually sent to MegaBull's simulator. Distinct from
+-- paper_trades, which records what WOULD have been bought and never contacts
+-- anything: this is a real API call with virtual money behind it.
+CREATE TABLE IF NOT EXISTS paper_orders (
+    id                SERIAL PRIMARY KEY,
+    announcement_id   INTEGER     NOT NULL UNIQUE,
+    company_symbol    VARCHAR(20) NOT NULL,
+    status            VARCHAR(12) NOT NULL,
+    reason            TEXT,
+    instrument_token  VARCHAR(24),
+    quantity          INTEGER,
+    price             NUMERIC(16,4),
+    order_id          TEXT,
+    order_cr          NUMERIC(16,2),
+    market_cap_cr     NUMERIC(18,2),
+    order_to_mcap_pct NUMERIC(10,2),
+    placed_at         TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_paper_orders_placed
+    ON paper_orders(placed_at DESC);
+CREATE INDEX IF NOT EXISTS idx_paper_orders_symbol
+    ON paper_orders(company_symbol, placed_at DESC);
+
 -- Company size, in rupees crore, cached per symbol. Fetched lazily for the
 -- handful of symbols about to alert rather than for the whole market, and
 -- refreshed on a TTL. See marketcap.py for why BSE is the source.
@@ -922,6 +946,79 @@ def count_notified_today(phone: str) -> int:
             (phone, 1),
         )
         return int(cur.fetchone()["n"])
+
+
+def fetch_unpapered_alerts(hours: int, limit: int) -> list:
+    """
+    Alerts no paper order has been considered for yet, oldest first.
+
+    Bounded by HOURS rather than days: switching paper trading on against a
+    populated database must not replay a month of alerts into the account.
+    """
+    sql = """
+        SELECT a.*
+          FROM stock_alerts a
+     LEFT JOIN paper_orders p ON p.announcement_id = a.announcement_id
+         WHERE p.announcement_id IS NULL
+           AND a.created_at >= NOW() - (%s * INTERVAL '1 hour')
+      ORDER BY a.announced_at ASC
+         LIMIT %s
+    """
+    with get_cursor() as cur:
+        cur.execute(sql, (hours, limit))
+        rows = [dict(r) for r in cur.fetchall()]
+    for r in rows:
+        for k in ("score", "order_value_cr", "market_cap_cr"):
+            if r.get(k) is not None:
+                r[k] = float(r[k])
+    return rows
+
+
+def papered_recently(symbol: str, days: int) -> bool:
+    """True if a paper order was already PLACED for this symbol in the window."""
+    with get_cursor() as cur:
+        cur.execute(
+            "SELECT 1 FROM paper_orders WHERE company_symbol = %s "
+            "AND status = 'PLACED' AND placed_at >= NOW() - (%s * INTERVAL '1 day') "
+            "LIMIT 1", (symbol.upper(), days))
+        return cur.fetchone() is not None
+
+
+def count_paper_orders_today() -> int:
+    with get_cursor() as cur:
+        cur.execute("SELECT COUNT(*) AS n FROM paper_orders WHERE status = 'PLACED' "
+                    "AND " + _day_window_tz("placed_at"), (1,))
+        return int(cur.fetchone()["n"])
+
+
+def save_paper_order(row: dict) -> None:
+    """Record one attempt, placed or not. Idempotent on announcement_id."""
+    sql = """
+        INSERT INTO paper_orders (
+            announcement_id, company_symbol, status, reason, instrument_token,
+            quantity, price, order_id, order_cr, market_cap_cr, order_to_mcap_pct
+        ) VALUES (
+            %(announcement_id)s, %(company_symbol)s, %(status)s, %(reason)s,
+            %(instrument_token)s, %(quantity)s, %(price)s, %(order_id)s,
+            %(order_cr)s, %(market_cap_cr)s, %(order_to_mcap_pct)s
+        ) ON CONFLICT (announcement_id) DO NOTHING
+    """
+    with get_cursor(dict_rows=False) as cur:
+        cur.execute(sql, row)
+
+
+def fetch_paper_orders(days: int, limit: int = 200) -> list:
+    with get_cursor() as cur:
+        cur.execute(
+            "SELECT * FROM paper_orders WHERE placed_at >= NOW() - "
+            "(%s * INTERVAL '1 day') ORDER BY placed_at DESC LIMIT %s",
+            (days, limit))
+        rows = [dict(r) for r in cur.fetchall()]
+    for r in rows:
+        for k in ("price", "order_cr", "market_cap_cr", "order_to_mcap_pct"):
+            if r.get(k) is not None:
+                r[k] = float(r[k])
+    return rows
 
 
 def fetch_untraded_alerts(days: int, limit: int) -> list:

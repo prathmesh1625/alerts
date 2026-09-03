@@ -185,6 +185,63 @@ services:
           cpus: "0.15"
           memory: 192M
 
+  # --- buys on an alert, with VIRTUAL money ----------------------------------
+  #
+  # MegaBull's paper-trading simulator. Real API calls and real prices; the
+  # money is not real and no brokerage account is involved. engine/megabull.py
+  # pins the endpoint as a constant rather than a setting, so nothing here or
+  # in Coolify can point this at a live broker - there is a test for exactly
+  # that, and it is the reason this service is safe to run at all.
+  #
+  # Off unless ALERT_PAPER_TRADING_ENABLED=true AND a key is present. With the
+  # key but not the flag it still records every decision, which is the useful
+  # way to watch the gate for a week before letting it buy.
+  #
+  # The MegaBull key EXPIRES AFTER ONE MONTH - regenerate it at trade.megabull.in
+  # and update ALERT_MEGABULL_API_KEY. Until then the log says so in words.
+  alert-paper:
+    build:
+      context: .
+      dockerfile: engine/Dockerfile
+    container_name: alert_paper
+    restart: always
+    command: python papertrader.py
+    environment:
+      - STANDALONE=true
+      - DB_HOST=alert-db
+      - DB_PORT=5432
+      - DB_NAME=${ALERT_DB_NAME:-alerts}
+      - DB_USER=${ALERT_DB_USER:-alerts}
+      - DB_PASSWORD=${ALERT_DB_PASSWORD:?ALERT_DB_PASSWORD must be set}
+
+      - PAPER_TRADING_ENABLED=${ALERT_PAPER_TRADING_ENABLED:-false}
+      - MEGABULL_API_KEY=${ALERT_MEGABULL_API_KEY:-}
+      - PAPER_POLL_SEC=${ALERT_PAPER_POLL_SEC:-30}
+      # Rs 25,000 a position out of Rs 5,00,000 is 20 positions, which is more
+      # than the gate produces in a month.
+      - PAPER_TRADE_VALUE_INR=${ALERT_PAPER_TRADE_VALUE_INR:-25000}
+      - PAPER_MAX_PER_DAY=${ALERT_PAPER_MAX_PER_DAY:-3}
+      # Hours, not days: switching this on must not replay a backlog of old
+      # alerts into the account in one pass.
+      - PAPER_LOOKBACK_HOURS=${ALERT_PAPER_LOOKBACK_HOURS:-6}
+      - PAPER_DEDUP_DAYS=${ALERT_PAPER_DEDUP_DAYS:-5}
+
+      # The gate itself is shared with the Testing agent - one set of rules,
+      # so the paper trades and the shadow record measure the same thing.
+      - TRADE_MIN_ORDER_CR=${ALERT_TRADE_MIN_ORDER_CR:-100}
+      - TRADE_MIN_ORDER_TO_MCAP_PCT=${ALERT_TRADE_MIN_ORDER_TO_MCAP_PCT:-10}
+      # Unused by this process, but config.py reads it at import.
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+    depends_on:
+      alert-db:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          # One indexed SELECT and a couple of small HTTPS calls per alert.
+          cpus: "0.15"
+          memory: 192M
+
   # --- measures what happened after each alert -------------------------------
   #
   # Fills in what the stock was doing BEFORE an alert and what it did after,
@@ -333,6 +390,9 @@ services:
       - DB_PASSWORD=${ALERT_DB_PASSWORD:?ALERT_DB_PASSWORD must be set}
       - PDF_CACHE_DIR=/app/pdf_cache
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      # Read-only here: the API shows the paper account's balance on the
+      # paper-trading page. It never places an order.
+      - MEGABULL_API_KEY=${ALERT_MEGABULL_API_KEY:-}
 
       # Gate for the endpoints that must not be public - currently the record
       # of what would have been traded. UNSET means those endpoints refuse to

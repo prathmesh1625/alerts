@@ -63,6 +63,8 @@ export const fetchConfig = () => get("/api/config");
 // These sit behind the admin token because they touch the broker session and
 // the record of what the account would have bought. They are NOT part of the
 // alerts view, which stays public and unchanged.
+export const fetchPaperOrders = (params) =>
+    get("/api/paper-orders", params, { admin: true });
 export const fetchPaperTrades = (params) =>
     get("/api/paper-trades", params, { admin: true });
 export const fetchNearMisses = (params) => get("/api/near-misses", params);

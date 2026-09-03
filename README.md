@@ -792,7 +792,7 @@ three headline numbers, a `breakdown` JSONB with the per-rule arithmetic, and
 
 ---
 
-## The dashboard has three views
+## The dashboard has five views
 
 **`/` — Alerts.** What cleared the formula, ranked by conviction. The answer to
 "what should I look at today?"
@@ -827,6 +827,69 @@ them, since the agent only fetches the ~12% it decides to read. The API falls
 back to pulling the document from the exchange on demand, so the first open of
 an older filing takes a moment. Filter by company, by outcome
 (alerts / read / skipped), by date window, or search filing titles.
+
+## Two views that are not about filings
+
+Both sit behind the admin token, both are off by default, and neither can touch
+the alerts path. They exist to answer a question the alerts view cannot: *was
+the alert worth acting on?*
+
+### `/testing` — Testing agent
+
+A shadow record. On every alert it applies one gate — **STRONG conviction, order
+at least Rs 100 Cr, and that order worth at least 10% of the company's market
+cap** — and writes down what it would have bought, at what reference price, and
+why the rest were passed over. It contacts no broker and places nothing. The
+point is to see a month of decisions before believing any of them.
+
+The 10% rule is the one that does the work. An order is only news if it is large
+relative to the company receiving it; Rs 500 Cr means something different to a
+Rs 800 Cr company than to a Rs 40,000 Cr one, and the headline value alone
+cannot tell them apart.
+
+### `/paper` — Paper trading
+
+The same gate, but it actually places the order — against **MegaBull's
+paper-trading simulator**, with Rs 5,00,000 of virtual money. Real API calls,
+real prices, real fills, real losses; no brokerage account exists and no money
+does either.
+
+The safety argument is one line of code: the endpoint in `engine/megabull.py` is
+a **constant, not a setting**.
+
+```python
+BASE = "https://api.megabull.in"
+```
+
+A configurable base URL is one environment variable away from a live broker. A
+constant is not, and `test_papertrader.py` fails if anyone turns it back into
+one — that test matters more than the rest of the file. There is a second test
+asserting no real broker's hostname appears anywhere in `engine/`.
+
+Everything else is a brake:
+
+| Setting | Default | Why |
+|---|---|---|
+| `ALERT_PAPER_TRADING_ENABLED` | `false` | With a key but not this flag it records decisions and buys nothing. That is the useful first week. |
+| `ALERT_PAPER_TRADE_VALUE_INR` | `25000` | 20 positions out of Rs 5,00,000 — more than the gate produces in a month. |
+| `ALERT_PAPER_MAX_PER_DAY` | `3` | A bad afternoon costs three positions, not the account. |
+| `ALERT_PAPER_LOOKBACK_HOURS` | `6` | Hours, not days. Switching this on against a populated database must not replay a backlog into the account in one pass. |
+| `ALERT_PAPER_DEDUP_DAYS` | `5` | Two filings about one order buy the stock once. |
+
+Position size is the budget divided by the live price, capped by the virtual
+money actually left and by MegaBull's own 10,000-unit ceiling — the balance is
+read before each order rather than assumed, so an account nearly deployed
+shrinks the position instead of sending one that bounces. Orders are **CNC**,
+not intraday: an order-win thesis plays out over days, and MIS would be squared
+off at the close regardless of it.
+
+**The MegaBull key expires after one month.** It will stop working on a date
+nobody is watching for, so a 401 from MegaBull is reported in those words —
+"regenerate at trade.megabull.in" — rather than as a bare HTTP code.
+
+The gate thresholds are shared between the two views. One set of rules, so the
+shadow record and the paper trades are measuring the same thing rather than
+drifting apart.
 
 ## Rule 4 runs live, not only after the close
 
