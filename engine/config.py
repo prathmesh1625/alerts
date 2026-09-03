@@ -507,6 +507,20 @@ TRADE_POLL_SEC = _int("TRADE_POLL_SEC", 20)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+#  Zerodha Kite Connect — AUTH AND READ ONLY
+#
+#  Nothing here enables order placement; no such code exists in this repo.
+#
+#  The secret is read from the environment and never stored, logged or
+#  returned, per Kite's own warning. The access_token it produces expires at
+#  06:00 IST the next day by regulation and cannot be refreshed, so a session
+#  is a daily human act rather than something the service can maintain.
+# ─────────────────────────────────────────────────────────────────────────────
+KITE_API_KEY = os.getenv("KITE_API_KEY", "")
+KITE_API_SECRET = os.getenv("KITE_API_SECRET", "")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 #  API
 # ─────────────────────────────────────────────────────────────────────────────
 API_HOST = os.getenv("API_HOST", "0.0.0.0")

@@ -17,6 +17,7 @@ from fastapi.responses import FileResponse
 
 import config
 import db
+import kite as kite_api
 import market
 import pdf_fetch
 from agent import resolve_pdf_path
@@ -405,6 +406,68 @@ def get_near_misses(days: int = Query(default=7, ge=1, le=90),
 
     out.sort(key=lambda x: -(x["largest_order_cr"] or 0))
     return {"window_days": days, "count": len(out), "near_misses": out}
+
+
+@app.get("/api/kite/status")
+def kite_status():
+    """
+    Whether a Kite session is live. Contains NO token, by design.
+
+    This API is reachable from the internet, and Kite's docs are explicit that
+    the access_token must not be exposed. Nothing here returns it, and there is
+    no endpoint anywhere that does.
+    """
+    return kite_api.status()
+
+
+@app.get("/api/kite/callback")
+def kite_callback(request_token: str = Query(default=None),
+                  status: str = Query(default=None),
+                  action: str = Query(default=None)):
+    """
+    Where Kite sends the browser after a login.
+
+    The request_token arrives as a query parameter, is valid for a couple of
+    minutes, is single-use, and is exchanged immediately. It is never logged:
+    a URL parameter ends up in access logs and browser history, so the less it
+    travels the better.
+
+    This endpoint is public because it has to be. That is acceptable only
+    because a request_token cannot be forged - it is minted by Kite for our
+    api_key - and because the exchange needs the api_secret, which lives in
+    the environment and never leaves the process.
+    """
+    if status and status != "success":
+        raise HTTPException(status_code=400,
+                            detail="Kite reported login {}".format(status))
+    if not request_token:
+        raise HTTPException(
+            status_code=400,
+            detail="no request_token - start at {}".format(kite_api.login_url())
+            if kite_api.configured() else "Kite is not configured")
+
+    try:
+        info = kite_api.exchange(request_token)
+    except kite_api.KiteError as e:
+        # The message, never the token.
+        raise HTTPException(status_code=400, detail=str(e))
+
+    return {"status": "ok",
+            "message": "Kite session established. It expires at 06:00 IST and "
+                       "cannot be refreshed - log in again tomorrow.",
+            **info}
+
+
+@app.get("/api/kite/margins")
+def kite_margins(segment: str = Query(default="equity")):
+    """
+    Available funds. Read-only, and useful before execution exists: it says
+    whether an order COULD have been afforded.
+    """
+    try:
+        return kite_api.margins(segment)
+    except kite_api.KiteError as e:
+        raise HTTPException(status_code=503, detail=str(e))
 
 
 @app.get("/api/paper-trades")
