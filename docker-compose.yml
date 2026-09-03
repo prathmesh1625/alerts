@@ -145,6 +145,46 @@ services:
           cpus: "0.15"
           memory: 192M
 
+  # --- records what it WOULD trade; places nothing ---------------------------
+  #
+  # SHADOW MODE. There is no code in this repo that can place an order - see
+  # engine/trader.py and the test that asserts it. This service exists to build
+  # the record that decides whether execution should ever be wired up.
+  #
+  # The gate is STRONG conviction, an order of at least Rs 100 Cr, AND that
+  # order being at least 10% of market cap. Over 30 days that admits 8 alerts
+  # and rejects 9 that clear the first two conditions.
+  alert-trader:
+    build:
+      context: .
+      dockerfile: engine/Dockerfile
+    container_name: alert_trader
+    restart: always
+    command: python trader.py
+    environment:
+      - STANDALONE=true
+      - DB_HOST=alert-db
+      - DB_PORT=5432
+      - DB_NAME=${ALERT_DB_NAME:-alerts}
+      - DB_USER=${ALERT_DB_USER:-alerts}
+      - DB_PASSWORD=${ALERT_DB_PASSWORD:?ALERT_DB_PASSWORD must be set}
+      - TRADE_MIN_ORDER_CR=${ALERT_TRADE_MIN_ORDER_CR:-100}
+      - TRADE_MIN_ORDER_TO_MCAP_PCT=${ALERT_TRADE_MIN_ORDER_TO_MCAP_PCT:-10}
+      - TRADE_VALUE_INR=${ALERT_TRADE_VALUE_INR:-100000}
+      - TRADE_MAX_PER_DAY=${ALERT_TRADE_MAX_PER_DAY:-3}
+      - TRADE_DEDUP_DAYS=${ALERT_TRADE_DEDUP_DAYS:-5}
+      # Unused by this process, but config.py reads it at import.
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+    depends_on:
+      alert-db:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          # One indexed SELECT and one quote lookup per alert.
+          cpus: "0.15"
+          memory: 192M
+
   # --- reads the filings worth reading, applies the formula ------------------
   alert-agent:
     build:

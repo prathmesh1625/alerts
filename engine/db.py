@@ -240,6 +240,32 @@ CREATE TABLE IF NOT EXISTS notified_alerts (
 CREATE INDEX IF NOT EXISTS idx_notified_alerts_sent_at
     ON notified_alerts(sent_at DESC);
 
+-- What the trading gate WOULD have done. Shadow only: nothing in this repo
+-- places an order, and this table is the evidence for deciding whether
+-- anything ever should.
+CREATE TABLE IF NOT EXISTS paper_trades (
+    id                 SERIAL PRIMARY KEY,
+    announcement_id    INTEGER     NOT NULL UNIQUE,
+    company_symbol     VARCHAR(20) NOT NULL,
+    would_trade        BOOLEAN     NOT NULL,
+    reason             TEXT,
+    session_state      VARCHAR(16),
+    session_note       TEXT,
+    conviction         VARCHAR(10),
+    order_cr           NUMERIC(16,2),
+    market_cap_cr      NUMERIC(18,2),
+    order_to_mcap_pct  NUMERIC(10,2),
+    reference_price    NUMERIC(16,4),
+    quantity           INTEGER,
+    intended_value_inr NUMERIC(16,2),
+    decided_at         TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_paper_trades_decided
+    ON paper_trades(decided_at DESC);
+CREATE INDEX IF NOT EXISTS idx_paper_trades_symbol
+    ON paper_trades(company_symbol, decided_at DESC);
+
 -- Company size, in rupees crore, cached per symbol. Fetched lazily for the
 -- handful of symbols about to alert rather than for the whole market, and
 -- refreshed on a TTL. See marketcap.py for why BSE is the source.
@@ -846,6 +872,80 @@ def count_notified_today(phone: str) -> int:
             (phone, 1),
         )
         return int(cur.fetchone()["n"])
+
+
+def fetch_untraded_alerts(days: int, limit: int) -> list:
+    """Alerts the trading gate has not yet judged, oldest first."""
+    sql = """
+        SELECT a.*
+          FROM stock_alerts a
+     LEFT JOIN paper_trades p ON p.announcement_id = a.announcement_id
+         WHERE p.announcement_id IS NULL
+           AND a.announced_at >= (timezone('Asia/Kolkata', now())
+                                  - (%s * INTERVAL '1 day'))
+      ORDER BY a.announced_at ASC
+         LIMIT %s
+    """
+    with get_cursor() as cur:
+        cur.execute(sql, (days, limit))
+        rows = [dict(r) for r in cur.fetchall()]
+    for r in rows:
+        for k in ("score", "order_value_cr", "market_cap_cr"):
+            if r.get(k) is not None:
+                r[k] = float(r[k])
+    return rows
+
+
+def traded_recently(symbol: str, days: int) -> bool:
+    """True if this symbol already has a would-trade decision in the window."""
+    with get_cursor() as cur:
+        cur.execute(
+            "SELECT 1 FROM paper_trades WHERE company_symbol = %s "
+            "AND would_trade AND decided_at >= NOW() - (%s * INTERVAL '1 day') "
+            "LIMIT 1", (symbol.upper(), days))
+        return cur.fetchone() is not None
+
+
+def count_trades_today() -> int:
+    """How many would-trade decisions have been taken today, in IST."""
+    with get_cursor() as cur:
+        cur.execute("SELECT COUNT(*) AS n FROM paper_trades WHERE would_trade "
+                    "AND " + _day_window_tz("decided_at"), (1,))
+        return int(cur.fetchone()["n"])
+
+
+def save_paper_trade(row: dict) -> None:
+    """Record one decision. Idempotent on announcement_id."""
+    sql = """
+        INSERT INTO paper_trades (
+            announcement_id, company_symbol, would_trade, reason,
+            session_state, session_note, conviction, order_cr, market_cap_cr,
+            order_to_mcap_pct, reference_price, quantity, intended_value_inr
+        ) VALUES (
+            %(announcement_id)s, %(company_symbol)s, %(would_trade)s, %(reason)s,
+            %(session_state)s, %(session_note)s, %(conviction)s, %(order_cr)s,
+            %(market_cap_cr)s, %(order_to_mcap_pct)s, %(reference_price)s,
+            %(quantity)s, %(intended_value_inr)s
+        ) ON CONFLICT (announcement_id) DO NOTHING
+    """
+    with get_cursor(dict_rows=False) as cur:
+        cur.execute(sql, row)
+
+
+def fetch_paper_trades(days: int, limit: int = 200) -> list:
+    """Recorded decisions, newest first."""
+    with get_cursor() as cur:
+        cur.execute(
+            "SELECT * FROM paper_trades WHERE decided_at >= NOW() - "
+            "(%s * INTERVAL '1 day') ORDER BY decided_at DESC LIMIT %s",
+            (days, limit))
+        rows = [dict(r) for r in cur.fetchall()]
+    for r in rows:
+        for k in ("order_cr", "market_cap_cr", "order_to_mcap_pct",
+                  "reference_price", "intended_value_inr"):
+            if r.get(k) is not None:
+                r[k] = float(r[k])
+    return rows
 
 
 def fetch_latency(days: int = 2, limit: int = 100) -> dict:

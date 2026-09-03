@@ -474,6 +474,39 @@ PRICE_BASELINE_MAX_BACKTRACK = _int("PRICE_BASELINE_MAX_BACKTRACK", 7)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+#  Trading gate — SHADOW ONLY
+#
+#  trader.py records what it WOULD buy. There is no code in this repo that can
+#  place an order, and these values do not change that; they decide what gets
+#  recorded. Wiring Kite is a separate change, deliberately not made yet.
+#
+#  The gate: STRONG, a large order, AND an order large RELATIVE to the company.
+#  The third condition is what makes the first two mean anything. Over 30 days
+#  it admits 8 alerts and rejects 9 that clear the other two - it keeps CCME,
+#  whose Rs 133 Cr order is 78% of a Rs 171 Cr company, and rejects NHPC, whose
+#  Rs 392 Cr order is 0.52% of a Rs 76,000 Cr one.
+# ─────────────────────────────────────────────────────────────────────────────
+TRADE_MIN_ORDER_CR = _float("TRADE_MIN_ORDER_CR", 100.0)
+TRADE_MIN_ORDER_TO_MCAP_PCT = _float("TRADE_MIN_ORDER_TO_MCAP_PCT", 10.0)
+
+# Notional per position, used only to record an intended size.
+TRADE_VALUE_INR = _float("TRADE_VALUE_INR", 100000.0)
+
+# One position per symbol inside this window. SUGSLLOYD announced the same
+# Rs 214.27 Cr order on two consecutive days and alerted twice; without this a
+# trader buys the same thing twice.
+TRADE_DEDUP_DAYS = _int("TRADE_DEDUP_DAYS", 5)
+
+# A ceiling on a day's activity. The gate admits about two a week, so hitting
+# this means something upstream is wrong, not that the market got busy.
+TRADE_MAX_PER_DAY = _int("TRADE_MAX_PER_DAY", 3)
+
+TRADE_LOOKBACK_DAYS = _int("TRADE_LOOKBACK_DAYS", 3)
+TRADE_BATCH = _int("TRADE_BATCH", 25)
+TRADE_POLL_SEC = _int("TRADE_POLL_SEC", 20)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 #  API
 # ─────────────────────────────────────────────────────────────────────────────
 API_HOST = os.getenv("API_HOST", "0.0.0.0")

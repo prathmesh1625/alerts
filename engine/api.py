@@ -407,6 +407,40 @@ def get_near_misses(days: int = Query(default=7, ge=1, le=90),
     return {"window_days": days, "count": len(out), "near_misses": out}
 
 
+@app.get("/api/paper-trades")
+def get_paper_trades(days: int = Query(default=30, ge=1, le=365),
+                     limit: int = Query(default=200, ge=1, le=1000),
+                     taken_only: bool = Query(default=False)):
+    """
+    What the trading gate WOULD have done. Nothing was bought.
+
+    The evidence for deciding whether execution should ever be wired up. Every
+    row records the numbers the decision turned on, so a shadow trade can be
+    argued with rather than taken on trust, and whether the market was even
+    open at the time - 56% of alerts arrive after the close, and treating those
+    as same-day fills would flatter every result computed from this.
+    """
+    rows = _db_call(db.fetch_paper_trades, days, limit)
+    if taken_only:
+        rows = [r for r in rows if r.get("would_trade")]
+    taken = [r for r in rows if r.get("would_trade")]
+    return {
+        "window_days": days,
+        "count": len(rows),
+        "would_trade": len(taken),
+        "mode": "SHADOW - no order was placed, and no code here can place one",
+        "gate": {
+            "conviction": "STRONG",
+            "min_order_cr": config.TRADE_MIN_ORDER_CR,
+            "min_order_to_mcap_pct": config.TRADE_MIN_ORDER_TO_MCAP_PCT,
+            "notional_per_trade_inr": config.TRADE_VALUE_INR,
+            "max_per_day": config.TRADE_MAX_PER_DAY,
+            "dedup_days": config.TRADE_DEDUP_DAYS,
+        },
+        "trades": rows,
+    }
+
+
 @app.get("/api/latency")
 def get_latency(days: int = Query(default=2, ge=1, le=30),
                 limit: int = Query(default=100, ge=1, le=1000)):
