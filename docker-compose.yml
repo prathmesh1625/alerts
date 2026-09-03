@@ -310,6 +310,11 @@ services:
       # The access_token Kite issues expires at 06:00 IST the next day by
       # regulation and cannot be refreshed, so a session is a daily human act:
       # visit /api/kite/status for the login link.
+      # Gate for the endpoints that must not be public: account funds, the
+      # Kite session, and the record of what would have been traded. UNSET
+      # means those endpoints refuse to serve at all - never that checks are
+      # off. Generate one with: openssl rand -hex 32
+      - ADMIN_TOKEN=${ALERT_ADMIN_TOKEN:-}
       - KITE_API_KEY=${ALERT_KITE_API_KEY:-}
       - KITE_API_SECRET=${ALERT_KITE_API_SECRET:-}
     volumes:

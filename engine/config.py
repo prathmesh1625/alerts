@@ -516,6 +516,14 @@ TRADE_POLL_SEC = _int("TRADE_POLL_SEC", 20)
 #  06:00 IST the next day by regulation and cannot be refreshed, so a session
 #  is a daily human act rather than something the service can maintain.
 # ─────────────────────────────────────────────────────────────────────────────
+# Gate for endpoints that must never be public. The dashboard's alert data is
+# served openly and always has been; account funds, the Kite session and the
+# trading record are a different category and are not.
+#
+# FAIL CLOSED: if this is unset, those endpoints refuse to serve at all rather
+# than serving to everyone. An empty admin token must never mean "no checks".
+ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "")
+
 KITE_API_KEY = os.getenv("KITE_API_KEY", "")
 KITE_API_SECRET = os.getenv("KITE_API_SECRET", "")
 

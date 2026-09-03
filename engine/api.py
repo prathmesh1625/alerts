@@ -11,7 +11,9 @@ Run:  uvicorn api:app --reload --port 8000
 import os
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Query
+import hmac
+
+from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
@@ -81,6 +83,29 @@ def _db_call(fn, *args, **kwargs):
             detail="database unavailable: {}".format(
                 str(e).strip().splitlines()[0][:200]),
         )
+
+
+def require_admin(x_admin_token: str = Header(default=None)):
+    """
+    Gate for anything that is not the dashboard's public alert data.
+
+    This API is reachable from the internet with no login, which is fine for
+    alerts and deliberately not fine for account funds, the Kite session, or
+    the record of what would have been traded.
+
+    Fails CLOSED. With no ADMIN_TOKEN configured these endpoints refuse to
+    serve rather than serving to everybody - an unset secret must never read
+    as "checks disabled".
+    """
+    if not config.ADMIN_TOKEN:
+        raise HTTPException(
+            status_code=503,
+            detail="this endpoint is disabled until ALERT_ADMIN_TOKEN is set")
+    if not x_admin_token or not hmac.compare_digest(str(x_admin_token),
+                                                    config.ADMIN_TOKEN):
+        # Constant-time, and the same message either way: a different response
+        # for "wrong" than for "missing" tells an attacker they are close.
+        raise HTTPException(status_code=401, detail="admin token required")
 
 
 @app.get("/health")
@@ -408,7 +433,7 @@ def get_near_misses(days: int = Query(default=7, ge=1, le=90),
     return {"window_days": days, "count": len(out), "near_misses": out}
 
 
-@app.get("/api/kite/status")
+@app.get("/api/kite/status", dependencies=[Depends(require_admin)])
 def kite_status():
     """
     Whether a Kite session is live. Contains NO token, by design.
@@ -452,13 +477,15 @@ def kite_callback(request_token: str = Query(default=None),
         # The message, never the token.
         raise HTTPException(status_code=400, detail=str(e))
 
+    # Deliberately minimal. This endpoint is public by necessity, so it
+    # confirms success and nothing else - no user id, no name, no exchanges.
+    # The detail is available through /api/kite/status, behind the admin token.
     return {"status": "ok",
             "message": "Kite session established. It expires at 06:00 IST and "
-                       "cannot be refreshed - log in again tomorrow.",
-            **info}
+                       "cannot be refreshed - log in again tomorrow."}
 
 
-@app.get("/api/kite/margins")
+@app.get("/api/kite/margins", dependencies=[Depends(require_admin)])
 def kite_margins(segment: str = Query(default="equity")):
     """
     Available funds. Read-only, and useful before execution exists: it says
@@ -470,7 +497,7 @@ def kite_margins(segment: str = Query(default="equity")):
         raise HTTPException(status_code=503, detail=str(e))
 
 
-@app.get("/api/paper-trades")
+@app.get("/api/paper-trades", dependencies=[Depends(require_admin)])
 def get_paper_trades(days: int = Query(default=30, ge=1, le=365),
                      limit: int = Query(default=200, ge=1, le=1000),
                      taken_only: bool = Query(default=False)):
