@@ -556,7 +556,12 @@ PAPER_DEDUP_DAYS = _int("PAPER_DEDUP_DAYS", 5)
 
 # Never act on an alert older than this, so switching paper trading on against
 # a populated database does not replay a month of alerts in one pass.
-PAPER_LOOKBACK_HOURS = _int("PAPER_LOOKBACK_HOURS", 6)
+#
+# 24 rather than 6: most alerts arrive after the close and are held for the
+# next open, so an alert announced at 20:00 has to survive 13 hours before it
+# can be acted on at all. Six hours silently discarded the majority of them.
+# A replay is bounded by PAPER_MAX_PER_DAY regardless.
+PAPER_LOOKBACK_HOURS = _int("PAPER_LOOKBACK_HOURS", 24)
 
 PAPER_BATCH = _int("PAPER_BATCH", 20)
 PAPER_POLL_SEC = _int("PAPER_POLL_SEC", 60)

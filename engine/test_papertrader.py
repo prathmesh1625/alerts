@@ -247,6 +247,68 @@ def test_the_daily_cap_is_small_because_the_gate_is_narrow():
     assert 0 < config.PAPER_MAX_PER_DAY <= 5
 
 
+# -----------------------------------------------------------------------------
+#  The market has to be open
+# -----------------------------------------------------------------------------
+
+def _no_db(*a, **k):
+    raise AssertionError("the database was read while the market was shut")
+
+
+def test_nothing_is_attempted_while_the_market_is_shut():
+    """
+    MegaBull rejects an order outside 09:15-15:30, and a recorded rejection is
+    keyed on announcement_id - so recording one would mark the alert handled
+    and it would never be retried at the open. Since 56% of alerts arrive
+    after 15:30, that would quietly lose most of them.
+    """
+    import trader
+    saved_state = trader.session_state
+    saved_fetch = db.fetch_unpapered_alerts
+    saved_save = db.save_paper_order
+    try:
+        db.fetch_unpapered_alerts = _no_db
+        db.save_paper_order = _no_db
+        for state in ("WEEKEND", "PRE_OPEN", "AFTER_CLOSE"):
+            papertrader._last_session = None
+            trader.session_state = lambda s=state: (s, "shut: {}".format(s))
+            assert papertrader.run_once(verbose=False) == 0, state
+    finally:
+        trader.session_state = saved_state
+        db.fetch_unpapered_alerts = saved_fetch
+        db.save_paper_order = saved_save
+        papertrader._last_session = None
+
+
+def test_an_open_market_does_reach_the_database():
+    """The converse, so the guard above cannot pass by blocking everything."""
+    import trader
+    saved_state = trader.session_state
+    saved_fetch = db.fetch_unpapered_alerts
+    seen = []
+    try:
+        papertrader._last_session = None
+        trader.session_state = lambda: ("OPEN", "open")
+        db.fetch_unpapered_alerts = lambda h, n: seen.append((h, n)) or []
+        papertrader.run_once(verbose=False)
+        assert seen, "the market was open and no alerts were read"
+    finally:
+        trader.session_state = saved_state
+        db.fetch_unpapered_alerts = saved_fetch
+        papertrader._last_session = None
+
+
+def test_the_lookback_outlives_a_night():
+    """
+    An alert at 20:00 cannot be acted on until 09:15 the next morning - 13
+    hours later. A lookback shorter than that discards the majority of alerts
+    before the market ever opens.
+    """
+    assert config.PAPER_LOOKBACK_HOURS >= 14, (
+        "lookback of {}h expires overnight alerts before the open".format(
+            config.PAPER_LOOKBACK_HOURS))
+
+
 class _Parked(Exception):
     """Raised by a stubbed sleep to prove the process parked rather than exited."""
 

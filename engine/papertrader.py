@@ -91,8 +91,26 @@ def _preflight():
     return True
 
 
+_last_session = None
+
+
 def run_once(verbose=True):
     """Buy anything that clears the gate and has not been bought already."""
+    global _last_session
+
+    # Nothing is attempted while the market is shut, and - this is the point -
+    # nothing is RECORDED either. A recorded attempt is keyed on
+    # announcement_id, so writing a rejection here would mark the alert handled
+    # and it would never be retried at the open. 56% of alerts arrive after
+    # 15:30 (see trader.session_state), so that is the common case, not a
+    # corner one. Leave them pending instead.
+    state, why = trader.session_state()
+    if state != _last_session:
+        _log(why)
+        _last_session = state
+    if state != "OPEN":
+        return 0
+
     try:
         alerts = db.fetch_unpapered_alerts(config.PAPER_LOOKBACK_HOURS,
                                            config.PAPER_BATCH)

@@ -226,8 +226,9 @@ services:
       - PAPER_TRADE_VALUE_INR=${ALERT_PAPER_TRADE_VALUE_INR:-25000}
       - PAPER_MAX_PER_DAY=${ALERT_PAPER_MAX_PER_DAY:-3}
       # Hours, not days: switching this on must not replay a backlog of old
-      # alerts into the account in one pass.
-      - PAPER_LOOKBACK_HOURS=${ALERT_PAPER_LOOKBACK_HOURS:-6}
+      # alerts into the account in one pass. 24 because most alerts arrive
+      # after the close and wait for the next open - 6 discarded them unread.
+      - PAPER_LOOKBACK_HOURS=${ALERT_PAPER_LOOKBACK_HOURS:-24}
       - PAPER_DEDUP_DAYS=${ALERT_PAPER_DEDUP_DAYS:-5}
 
       # The gate itself is shared with the Testing agent - one set of rules,
