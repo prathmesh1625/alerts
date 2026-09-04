@@ -8,6 +8,8 @@ test in this file is that, and it matters more than the rest.
 
 No network, no database. Run: pytest test_papertrader.py
 """
+import json
+
 import config
 import db
 import megabull
@@ -115,7 +117,7 @@ def test_a_buy_is_delivery_and_market_by_default():
     """
     s, saved = _with_request()
     try:
-        megabull.place_buy("5409537", 45)
+        megabull.place_buy("5409537", 45, price=210.5)
     finally:
         megabull._request = saved
     method, path, body = s.calls[0]
@@ -124,21 +126,74 @@ def test_a_buy_is_delivery_and_market_by_default():
     assert body["duration"] == "CNC"
     assert body["orderType"] == "MKT"
     assert body["instrumentToken"] == "5409537" and body["qty"] == 45
-    assert "price" not in body, "a market order must not carry a price"
+    # A price on a MARKET order looks wrong and is required: MegaBull answers
+    # HTTP 400 "Price cannot be Blank" without one. It does not set the fill -
+    # the simulator uses its own live quote.
+    assert body["price"] == 210.5, "MegaBull rejects an order with no price"
 
 
-def test_a_limit_order_requires_a_price():
+def test_every_order_type_requires_a_price():
+    """Not just LIMIT - MegaBull rejects a MKT order without one too."""
     s, saved = _with_request()
     try:
-        try:
-            megabull.place_buy("1", 10, order_type="LIMIT")
-            assert False, "should have raised"
-        except megabull.MegaBullError as e:
-            assert "price" in str(e)
+        for kind in ("MKT", "LIMIT", "SL"):
+            try:
+                megabull.place_buy("1", 10, order_type=kind)
+                assert False, "{} was sent with no price".format(kind)
+            except megabull.MegaBullError as e:
+                assert "price" in str(e).lower(), (kind, str(e))
         megabull.place_buy("1", 10, order_type="LIMIT", price=250.0)
         assert s.calls[-1][2]["price"] == 250.0
     finally:
         megabull._request = saved
+
+
+def test_a_list_of_validation_errors_is_rendered_not_concatenated():
+    """
+    The crash. MegaBull returns {"message": ["Price cannot be Blank"]}, and
+    formatting a list with `"; " + value` raises a TypeError from inside the
+    exception handler - which is not a MegaBullError, so it escaped every
+    caller and killed the pass instead of being recorded as one failed order.
+    """
+    import urllib.error
+    saved = megabull.urllib.request.urlopen
+    saved_key = config.MEGABULL_API_KEY
+    try:
+        config.MEGABULL_API_KEY = "k"
+
+        class _Body:
+            def read(self):
+                return json.dumps({
+                    "message": ["Price cannot be Blank", "qty must be > 0"],
+                    "error": "MethodArgumentNotValidException",
+                }).encode()
+
+        def boom(*a, **k):
+            err = urllib.error.HTTPError("u", 400, "Bad Request", {}, None)
+            err.read = _Body().read
+            raise err
+
+        megabull.urllib.request.urlopen = boom
+        try:
+            megabull.account()
+            assert False, "should have raised"
+        except megabull.MegaBullError as e:
+            assert "Price cannot be Blank" in str(e), str(e)
+            assert "qty must be > 0" in str(e), str(e)
+        except TypeError:
+            raise AssertionError(
+                "a list message still raises TypeError out of the handler")
+    finally:
+        megabull.urllib.request.urlopen = saved
+        config.MEGABULL_API_KEY = saved_key
+
+
+def test_readable_handles_every_shape_an_api_might_send():
+    assert megabull._readable("plain") == "plain"
+    assert megabull._readable(["a", "b"]) == "a; b"
+    assert megabull._readable(None) == ""
+    assert "x" in megabull._readable({"field": "x"})
+    assert megabull._readable(404) == "404"
 
 
 def test_nonsense_orders_are_refused_before_they_are_sent():

@@ -82,8 +82,9 @@ def _request(method, path, body=None):
     except urllib.error.HTTPError as e:
         detail = ""
         try:
-            detail = (json.loads(e.read().decode("utf-8", "replace")) or {}).get(
-                "message", "")
+            detail = _readable(
+                (json.loads(e.read().decode("utf-8", "replace")) or {}).get(
+                    "message", ""))
         except Exception:
             pass
         if e.code in (401, 403):
@@ -103,6 +104,31 @@ def _request(method, path, body=None):
         return json.loads(raw)
     except ValueError:
         raise MegaBullError("MegaBull returned a non-JSON response")
+
+
+def _readable(value):
+    """
+    An error detail as a string, whatever shape it arrived in.
+
+    MegaBull returns validation errors as a LIST - {"message": ["Price cannot
+    be Blank"]} - and formatting that with `"; " + value` raised a TypeError
+    from INSIDE the exception handler. That is not a MegaBullError, so it flew
+    past every caller's `except MegaBullError`, killed the whole pass, and the
+    failure was never recorded - so it retried, and failed the same way, every
+    60 seconds.
+    """
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (list, tuple, set)):
+        return "; ".join(_readable(v) for v in value)
+    if isinstance(value, dict):
+        try:
+            return json.dumps(value)
+        except Exception:
+            return str(value)
+    return str(value)
 
 
 def _unwrap(payload):
@@ -216,12 +242,16 @@ def place_buy(instrument_token, qty, duration="CNC", order_type="MKT", price=Non
     if duration not in ("CNC", "MIS"):
         raise MegaBullError("duration must be CNC or MIS")
 
+    # MegaBull requires a price on EVERY order type, market ones included -
+    # "Price cannot be Blank", HTTP 400. It is not the fill price: the
+    # simulator fills a MKT order at its own live quote (1 BRAHMINFRA sent at
+    # 164.8 filled at 165.4). It is a required field, so it is always sent.
+    if not price or float(price) <= 0:
+        raise MegaBullError("a price is required - MegaBull rejects an order without one")
+
     body = {"instrumentToken": str(instrument_token), "qty": qty,
-            "type": "BUY", "duration": duration, "orderType": order_type}
-    if order_type == "LIMIT":
-        if not price or price <= 0:
-            raise MegaBullError("a LIMIT order needs a price")
-        body["price"] = float(price)
+            "type": "BUY", "duration": duration, "orderType": order_type,
+            "price": float(price)}
 
     return _unwrap(_request("POST", "/api/order/buysell", body))
 

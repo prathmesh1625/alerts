@@ -161,18 +161,25 @@ def run_once(verbose=True):
 
         if would:
             try:
-                resp = megabull.place_buy(token, qty)
+                resp = megabull.place_buy(token, qty, price=price)
                 order_id = str((resp or {}).get("orderId")
                                or (resp or {}).get("id") or "")
+                fill = (resp or {}).get("price") or price
                 status = "PLACED"
-                reason = "bought {} at ~Rs {}".format(qty, price)
-                available -= qty * float(price or 0)
+                reason = "bought {} at Rs {}".format(qty, fill)
+                available -= qty * float(fill or 0)
+                price = fill
                 bought += 1
-                _log("BOUGHT {:12} {:>5} @ ~{:<9} order {}".format(
-                    sym, qty, price, order_id or "?"))
-            except megabull.MegaBullError as e:
-                status, reason = "FAILED", str(e)
-                _log("{:12} order rejected: {}".format(sym, e))
+                _log("BOUGHT {:12} {:>5} @ {:<9} order {}".format(
+                    sym, qty, fill, order_id or "?"))
+            # Exception, not just MegaBullError. An unexpected error here used
+            # to escape the pass entirely, so nothing was recorded and the same
+            # alert failed the same way every 60 seconds forever. Recording it
+            # costs one alert; letting it escape costs all of them.
+            except Exception as e:
+                status = "FAILED"
+                reason = "{}: {}".format(type(e).__name__, e)
+                _log("{:12} order rejected: {}".format(sym, reason))
 
         try:
             db.save_paper_order({
