@@ -399,6 +399,21 @@ services:
       # paper-trading page. It never places an order.
       - MEGABULL_API_KEY=${ALERT_MEGABULL_API_KEY:-}
 
+      # DISPLAY ONLY, and they must match what alert-trader and alert-paper
+      # are actually given. The API prints these as "the gate" on the Testing
+      # agent and Paper trading pages; without them it printed the compiled-in
+      # defaults instead, so the page reported "Recording only" and a Rs 100 Cr
+      # threshold no matter what the services were really running. A readout
+      # that cannot be wrong is worth more than one that is usually right.
+      - PAPER_TRADING_ENABLED=${ALERT_PAPER_TRADING_ENABLED:-false}
+      - PAPER_TRADE_VALUE_INR=${ALERT_PAPER_TRADE_VALUE_INR:-25000}
+      - PAPER_MAX_PER_DAY=${ALERT_PAPER_MAX_PER_DAY:-3}
+      - TRADE_MIN_ORDER_CR=${ALERT_TRADE_MIN_ORDER_CR:-100}
+      - TRADE_MIN_ORDER_TO_MCAP_PCT=${ALERT_TRADE_MIN_ORDER_TO_MCAP_PCT:-10}
+      - TRADE_VALUE_INR=${ALERT_TRADE_VALUE_INR:-100000}
+      - TRADE_MAX_PER_DAY=${ALERT_TRADE_MAX_PER_DAY:-3}
+      - TRADE_DEDUP_DAYS=${ALERT_TRADE_DEDUP_DAYS:-5}
+
       # Gate for the endpoints that must not be public - currently the record
       # of what would have been traded. UNSET means those endpoints refuse to
       # serve at all, never that checks are off.

@@ -126,6 +126,49 @@ def test_the_public_endpoints_are_the_expected_set():
         .format(sorted(public - expected), sorted(expected - public)))
 
 
+
+def test_the_api_is_told_every_setting_it_reports():
+    """
+    The API PRINTS the trading gate on two pages but does not act on it, so
+    nothing fails if it is never given those variables - it just quietly
+    reports the compiled-in defaults instead.
+
+    That is what happened: the Paper trading page said "Recording only" and
+    "order >= Rs 100 Cr" while the service behind it was running with whatever
+    Coolify actually had. A readout that cannot be wrong is worth more than one
+    that is usually right.
+
+    So: any TRADE_/PAPER_ setting handed to a service that ACTS on it must also
+    be handed to the API that DISPLAYS it.
+    """
+    import os
+    import re
+    import yaml
+    here = os.path.dirname(os.path.abspath(__file__))
+    path = os.path.join(os.path.dirname(here), "docker-compose.yml")
+    if not os.path.exists(path):
+        return
+    services = yaml.safe_load(open(path, encoding="utf-8"))["services"]
+
+    def names(svc):
+        out = set()
+        for line in services.get(svc, {}).get("environment", []) or []:
+            out.add(str(line).split("=", 1)[0].strip())
+        return out
+
+    api = names("alert-api")
+    acting = names("alert-trader") | names("alert-paper")
+    gate = {n for n in acting if n.startswith(("TRADE_", "PAPER_"))}
+
+    # Only the ones the API actually reports.
+    reported = set(re.findall(r"config\.((?:TRADE|PAPER)_[A-Z_]+)",
+                              open(os.path.join(here, "api.py"),
+                                   encoding="utf-8").read()))
+    missing = sorted((gate & reported) - api)
+    assert not missing, (
+        "alert-api reports these but is never given them, so it shows "
+        "defaults: {}".format(missing))
+
 if __name__ == "__main__":
     passed = failed = 0
     for name, fn in sorted(globals().items()):
